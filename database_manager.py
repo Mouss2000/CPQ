@@ -40,6 +40,18 @@ class DatabaseManager:
                 self._create_empty_db()
         # Always run migrations for tables that may be missing from old seed DBs
         self._ensure_calculator_tables()
+        self._migrate_image_path()
+
+    def _migrate_image_path(self):
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT image_path FROM products LIMIT 1")
+        except sqlite3.OperationalError:
+            conn.execute("ALTER TABLE products ADD COLUMN image_path TEXT")
+            conn.commit()
+        finally:
+            conn.close()
 
     def _ensure_calculator_tables(self):
         """Ensure sheet_metal_thicknesses and global_constants exist with seed data."""
@@ -208,28 +220,28 @@ class DatabaseManager:
         conn.close()
         return count > 0
 
-    def add_product(self, category_code, color, dimension, width, height):
+    def add_product(self, category_code, color, dimension, width, height, image_path=None):
         """Insert a new product. Returns new product_id. Raises ValueError if duplicate."""
         if self.product_exists(category_code, color, dimension):
             raise ValueError(f"Product {category_code}/{color}/{dimension} already exists")
         conn = self.get_connection()
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO products (category_code, dimension, width, height, color, excel_cost, excel_tariff) VALUES (?, ?, ?, ?, ?, 0.0, NULL)",
-            (category_code, dimension, width, height, color)
+            "INSERT INTO products (category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff) VALUES (?, ?, ?, ?, ?, ?, 0.0, NULL)",
+            (category_code, dimension, width, height, color, image_path)
         )
         product_id = cur.lastrowid
         conn.commit()
         conn.close()
         return product_id
 
-    def update_product(self, product_id, category_code, color, dimension, width, height):
+    def update_product(self, product_id, category_code, color, dimension, width, height, image_path=None):
         """Update product metadata."""
         conn = self.get_connection()
         cur = conn.cursor()
         cur.execute(
-            "UPDATE products SET category_code = ?, color = ?, dimension = ?, width = ?, height = ? WHERE id = ?",
-            (category_code, color, dimension, width, height, product_id)
+            "UPDATE products SET category_code = ?, color = ?, dimension = ?, width = ?, height = ?, image_path = ? WHERE id = ?",
+            (category_code, color, dimension, width, height, image_path, product_id)
         )
         conn.commit()
         conn.close()
@@ -317,11 +329,11 @@ class DatabaseManager:
         conn.close()
 
     def get_product_by_id(self, product_id):
-        """Return product row by ID: (id, category_code, dimension, width, height, color, excel_cost)."""
+        """Return product row by ID: (id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff)."""
         conn = self.get_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, category_code, dimension, width, height, color, excel_cost FROM products WHERE id = ?",
+            "SELECT id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff FROM products WHERE id = ?",
             (product_id,)
         )
         row = cur.fetchone()
@@ -342,7 +354,7 @@ class DatabaseManager:
         conn = self.get_connection()
         try:
             cur = conn.cursor()
-            cur.execute("SELECT category_code FROM checkpoint_products LIMIT 1")
+            cur.execute("SELECT image_path FROM checkpoint_products LIMIT 1")
         except sqlite3.OperationalError:
             # Column doesn't exist (old schema), wipe tables to recreate with full snapshot schema
             conn.executescript("""
@@ -365,6 +377,7 @@ class DatabaseManager:
                 width INTEGER,
                 height INTEGER,
                 color TEXT,
+                image_path TEXT,
                 excel_cost REAL,
                 excel_tariff REAL,
                 FOREIGN KEY (checkpoint_id) REFERENCES pricing_checkpoints(id)
@@ -401,8 +414,8 @@ class DatabaseManager:
         """, (cp_id,))
         # Snapshot all products completely
         cur.execute("""
-            INSERT INTO checkpoint_products (checkpoint_id, product_id, category_code, dimension, width, height, color, excel_cost, excel_tariff)
-            SELECT ?, id, category_code, dimension, width, height, color, excel_cost, excel_tariff
+            INSERT INTO checkpoint_products (checkpoint_id, product_id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff)
+            SELECT ?, id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff
             FROM products
         """, (cp_id,))
         conn.commit()
@@ -437,8 +450,8 @@ class DatabaseManager:
         
         # 2. Restore products exactly as they were (preserving ID)
         cur.execute("""
-            INSERT INTO products (id, category_code, dimension, width, height, color, excel_cost, excel_tariff)
-            SELECT product_id, category_code, dimension, width, height, color, excel_cost, excel_tariff
+            INSERT INTO products (id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff)
+            SELECT product_id, category_code, dimension, width, height, color, image_path, excel_cost, excel_tariff
             FROM checkpoint_products
             WHERE checkpoint_id = ?
         """, (checkpoint_id,))

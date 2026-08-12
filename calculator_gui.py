@@ -1,21 +1,26 @@
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from database_manager import DatabaseManager
 import math
+import os
+import shutil
+import uuid
 
 COLORS = {
-    "bg_dark":       "#0f1117",
-    "bg_card":       "#1a1d27",
-    "bg_card_hover": "#22263a",
-    "accent":        "#4f8cff",
-    "accent_hover":  "#6ba1ff",
-    "accent_dim":    "#2a4a8f",
-    "text_primary":  "#e8eaf0",
-    "text_secondary":"#8b8fa3",
-    "text_muted":    "#565b6e",
-    "border":        "#2a2d3a",
+    "bg_dark":       "#161616",
+    "bg_card":       "#1E1E1E",
+    "bg_card_hover": "#2A2A2A",
+    "bg_input":      "#1A1A1A",
+    "accent":        "#F05B28",
+    "accent_hover":  "#FF7A4D",
+    "accent_dim":    "#3D1E10",
+    "text_primary":  "#FFFFFF",
+    "text_secondary":"#999999",
+    "text_muted":    "#555555",
+    "border":        "#2E2E2E",
     "success":       "#34d399",
-    "error":         "#f87171"
+    "warning":       "#fbbf24",
+    "error":         "#f87171",
 }
 
 class CalculatorFrame(ctk.CTkFrame):
@@ -40,6 +45,7 @@ class CalculatorFrame(ctk.CTkFrame):
         self.h_var = ctk.StringVar(value="400")
         self.depth_var = ctk.StringVar(value="300")
         self.diameter_var = ctk.StringVar(value="300")
+        self.image_path_var = ctk.StringVar(value="")
 
         # Base Material variables
         self.tole_check_var = ctk.BooleanVar(value=True)
@@ -58,15 +64,15 @@ class CalculatorFrame(ctk.CTkFrame):
 
     def _build_ui(self):
         # Header
-        ctk.CTkLabel(self, text="🖩  CALCULATEUR & NOMENCLATURE", font=ctk.CTkFont(size=18, weight="bold"), text_color=COLORS["accent"]).pack(pady=(16, 4), padx=24, anchor="w")
+        ctk.CTkLabel(self, text="🖩  CALCULATEUR & NOMENCLATURE", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=COLORS["accent"]).pack(pady=(16, 4), padx=24, anchor="w")
         
         main_scroll = ctk.CTkScrollableFrame(self, fg_color=COLORS["bg_dark"])
         main_scroll.pack(fill="both", expand=True, padx=12, pady=12)
         
         # ── 1. IDENTITÉ PRODUIT ──
-        meta_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=12)
+        meta_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=8)
         meta_frame.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(meta_frame, text="1. IDENTITÉ PRODUIT", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", padx=14, pady=(10, 5))
+        ctk.CTkLabel(meta_frame, text="1. IDENTITÉ PRODUIT", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["accent"]).pack(anchor="w", padx=14, pady=(10, 5))
         
         row1 = ctk.CTkFrame(meta_frame, fg_color="transparent")
         row1.pack(fill="x", padx=14, pady=5)
@@ -80,6 +86,14 @@ class CalculatorFrame(ctk.CTkFrame):
         self.color_var = ctk.StringVar(value="Blanc")
         ctk.CTkLabel(row1, text="Couleur :", width=55, anchor="w", text_color=COLORS["text_secondary"]).pack(side="left")
         ctk.CTkComboBox(row1, variable=self.color_var, values=colors, width=130, fg_color=COLORS["bg_dark"], border_color=COLORS["border"]).pack(side="left", padx=(0, 15))
+        
+        row_img = ctk.CTkFrame(meta_frame, fg_color="transparent")
+        row_img.pack(fill="x", padx=14, pady=(5, 3))
+        
+        ctk.CTkLabel(row_img, text="Image :", width=70, anchor="w", text_color=COLORS["text_secondary"]).pack(side="left")
+        ctk.CTkButton(row_img, text="Sélectionner", width=100, fg_color=COLORS["bg_dark"], border_color=COLORS["border"], border_width=1, hover_color=COLORS["bg_card_hover"], command=self.choose_image).pack(side="left", padx=(0, 15))
+        self.lbl_selected_img = ctk.CTkLabel(row_img, text="Aucune image sélectionnée", text_color=COLORS["text_muted"], font=ctk.CTkFont(size=11, slant="italic"))
+        self.lbl_selected_img.pack(side="left")
         
         row2 = ctk.CTkFrame(meta_frame, fg_color="transparent")
         row2.pack(fill="x", padx=14, pady=(5, 3))
@@ -108,9 +122,9 @@ class CalculatorFrame(ctk.CTkFrame):
         h_entry.bind("<KeyRelease>", self.recalculate)
 
         # ── 2. MATIÈRE PREMIÈRE ──
-        base_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=12)
+        base_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=8)
         base_frame.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(base_frame, text="2. MATIÈRE PREMIÈRE (Calcul Auto)", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", padx=14, pady=(10, 5))
+        ctk.CTkLabel(base_frame, text="2. MATIÈRE PREMIÈRE (CALCUL AUTO)", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["accent"]).pack(anchor="w", padx=14, pady=(10, 5))
         
         th_vals = [t[0] for t in self.thicknesses] if self.thicknesses else ["EP 8/10"]
         
@@ -157,29 +171,28 @@ class CalculatorFrame(ctk.CTkFrame):
         ctk.CTkLabel(rmb_row, textvariable=self.rmb_subtotal_var, font=ctk.CTkFont(weight="bold"), text_color=COLORS["accent"], width=60, anchor="e").pack(side="left", padx=(0, 5))
 
 
-
         # ── 3. COMPOSANTS ADDITIONNELS (NOMENCLATURE) ──
-        self.bom_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=12)
+        self.bom_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=8)
         self.bom_frame.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(self.bom_frame, text="3. COMPOSANTS ADDITIONNELS", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", padx=14, pady=(10, 5))
+        ctk.CTkLabel(self.bom_frame, text="3. COMPOSANTS ADDITIONNELS", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["accent"]).pack(anchor="w", padx=14, pady=(10, 5))
         
         self.comp_container = ctk.CTkFrame(self.bom_frame, fg_color="transparent")
         self.comp_container.pack(fill="x", padx=14, pady=5)
         
         hdr = ctk.CTkFrame(self.comp_container, fg_color="transparent")
         hdr.pack(fill="x", pady=2)
-        ctk.CTkLabel(hdr, text="Nom", width=120, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Unité", width=90, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Qté", width=100, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Prix/Unité", width=80, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Sous-total", width=80, anchor="e", font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="Nom", width=120, anchor="w", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="Unité", width=90, anchor="w", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="Qté", width=100, anchor="w", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="Prix/Unité", width=80, anchor="w", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="Sous-total", width=80, anchor="e", font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
         
         ctk.CTkButton(self.bom_frame, text="➕ Ajouter Composant", command=self.add_comp_row, fg_color="transparent", border_width=1, border_color=COLORS["accent"], text_color=COLORS["accent"], height=28).pack(pady=(5, 10), padx=14, anchor="w")
 
         # ── 4. TARIFICATION & MAIN D'ŒUVRE ──
-        pr_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=12)
+        pr_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_card"], corner_radius=8)
         pr_frame.pack(fill="x", pady=(0, 10))
-        ctk.CTkLabel(pr_frame, text="4. TARIFICATION & MAIN D'ŒUVRE", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", padx=14, pady=(10, 5))
+        ctk.CTkLabel(pr_frame, text="4. TARIFICATION & MAIN D'ŒUVRE", font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["accent"]).pack(anchor="w", padx=14, pady=(10, 5))
         
         grid = ctk.CTkFrame(pr_frame, fg_color="transparent")
         grid.pack(fill="x", padx=14, pady=5)
@@ -229,18 +242,18 @@ class CalculatorFrame(ctk.CTkFrame):
         e5.bind("<KeyRelease>", self.recalculate)
 
         # ── 5. RÉSULTATS ──
-        res_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_dark"], corner_radius=12, border_width=1, border_color=COLORS["border"])
+        res_frame = ctk.CTkFrame(main_scroll, fg_color=COLORS["bg_dark"], corner_radius=8, border_width=1, border_color=COLORS["accent"])
         res_frame.pack(fill="x", pady=(10, 10))
         
-        self.lbl_mat_sum = ctk.CTkLabel(res_frame, text="Somme Matériaux : 0.00 DH", font=ctk.CTkFont(size=14))
+        self.lbl_mat_sum = ctk.CTkLabel(res_frame, text="Somme Matériaux : 0.00 DH", font=ctk.CTkFont(family="Consolas", size=14))
         self.lbl_mat_sum.pack(pady=(10, 2), padx=20, anchor="w")
-        self.lbl_exec = ctk.CTkLabel(res_frame, text="Coût EXEC : 0.00 DH", font=ctk.CTkFont(size=14))
+        self.lbl_exec = ctk.CTkLabel(res_frame, text="Coût EXEC : 0.00 DH", font=ctk.CTkFont(family="Consolas", size=14))
         self.lbl_exec.pack(pady=2, padx=20, anchor="w")
-        self.lbl_pr = ctk.CTkLabel(res_frame, text="PR (Coût de Revient) : 0.00 DH", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["accent"])
+        self.lbl_pr = ctk.CTkLabel(res_frame, text="PR (Coût de Revient) : 0.00 DH", font=ctk.CTkFont(family="Consolas", size=16, weight="bold"), text_color=COLORS["accent"])
         self.lbl_pr.pack(pady=2, padx=20, anchor="w")
-        self.lbl_pt = ctk.CTkLabel(res_frame, text="PT (Prix de Vente) : 0.00 DH", font=ctk.CTkFont(size=16, weight="bold"), text_color=COLORS["success"])
+        self.lbl_pt = ctk.CTkLabel(res_frame, text="PT (Prix de Vente) : 0.00 DH", font=ctk.CTkFont(family="Consolas", size=16, weight="bold"), text_color=COLORS["success"])
         self.lbl_pt.pack(pady=2, padx=20, anchor="w")
-        self.lbl_net = ctk.CTkLabel(res_frame, text="Prix Net (après Remise) : 0.00 DH", font=ctk.CTkFont(size=18, weight="bold"), text_color="#fff")
+        self.lbl_net = ctk.CTkLabel(res_frame, text="Prix Net (après Remise) : 0.00 DH", font=ctk.CTkFont(family="Consolas", size=16, weight="bold"), text_color="#fff")
         self.lbl_net.pack(pady=(2, 10), padx=20, anchor="w")
         
         # Formula breakdown label
@@ -250,7 +263,14 @@ class CalculatorFrame(ctk.CTkFrame):
         ctk.CTkButton(self, text="💾  Enregistrer au Catalogue", command=self.save_to_catalog, fg_color=COLORS["success"], hover_color="#2ab883", text_color=COLORS["bg_dark"], font=ctk.CTkFont(size=14, weight="bold"), height=42).pack(fill="x", padx=24, pady=(0, 24))
         
         self.toggle_base_row("tole")
+        self.toggle_base_row("tole")
         self.toggle_base_row("rmb")
+
+    def choose_image(self):
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg")])
+        if path:
+            self.image_path_var.set(path)
+            self.lbl_selected_img.configure(text=os.path.basename(path))
 
     def toggle_base_row(self, row_type):
         if row_type == "tole":
@@ -503,7 +523,17 @@ class CalculatorFrame(ctk.CTkFrame):
             return
             
         try:
-            pid = self.db_mgr.add_product(cat, color, dim, w_int, h_int)
+            dest_img_path = None
+            src_img = self.image_path_var.get()
+            if src_img and os.path.exists(src_img):
+                dest_dir = os.path.join(self.db_mgr.app_data_dir, "images")
+                os.makedirs(dest_dir, exist_ok=True)
+                ext = os.path.splitext(src_img)[1]
+                new_name = f"img_{uuid.uuid4().hex[:8]}{ext}"
+                dest_img_path = os.path.join(dest_dir, new_name)
+                shutil.copy2(src_img, dest_img_path)
+                
+            pid = self.db_mgr.add_product(cat, color, dim, w_int, h_int, image_path=dest_img_path)
         except Exception as e:
             messagebox.showerror("Erreur", str(e), parent=self)
             return

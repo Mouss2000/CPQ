@@ -9,13 +9,12 @@ import os
 import sys
 import ctypes
 import traceback
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from database_manager import DatabaseManager
+from PIL import Image
 
 
 # ─── DPI Awareness (must be set before any Tk window is created) ─────────────
-# This ensures winfo_screenwidth/height return TRUE pixel values on Windows,
-# not scaled values (e.g. 1920 instead of 1280 on a 150% scaled display).
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)  # PROCESS_SYSTEM_DPI_AWARE
 except (AttributeError, OSError):
@@ -28,21 +27,20 @@ ctk.set_default_color_theme("blue")
 
 # ─── Color Palette ───────────────────────────────────────────────────────────
 COLORS = {
-    "bg_dark":       "#0f1117",
-    "bg_card":       "#1a1d27",
-    "bg_card_hover": "#22263a",
-    "accent":        "#4f8cff",
-    "accent_hover":  "#6ba1ff",
-    "accent_dim":    "#2a4a8f",
-    "text_primary":  "#e8eaf0",
-    "text_secondary":"#8b8fa3",
-    "text_muted":    "#565b6e",
-    "border":        "#2a2d3a",
+    "bg_dark":       "#161616",
+    "bg_card":       "#1E1E1E",
+    "bg_card_hover": "#2A2A2A",
+    "bg_input":      "#1A1A1A",
+    "accent":        "#F05B28",
+    "accent_hover":  "#FF7A4D",
+    "accent_dim":    "#3D1E10",
+    "text_primary":  "#FFFFFF",
+    "text_secondary":"#999999",
+    "text_muted":    "#555555",
+    "border":        "#2E2E2E",
     "success":       "#34d399",
     "warning":       "#fbbf24",
     "error":         "#f87171",
-    "pr_color":      "#4f8cff",
-    "pt_color":      "#34d399",
 }
 
 
@@ -153,7 +151,7 @@ class DatabaseQuery:
         cur = conn.cursor()
         cur.execute(
             """SELECT category_code, dimension, width, height, color, 
-                      excel_cost, excel_tariff 
+                      excel_cost, excel_tariff, image_path 
                FROM products 
                WHERE category_code = ? AND color = ? AND dimension = ?""",
             (category_code, color, dimension)
@@ -201,429 +199,634 @@ class DatabaseQuery:
         return rows
 
 
-class PricingCard(ctk.CTkFrame):
-    """Displays PR (Cost) and BOM breakdown in a styled card layout."""
+class CPQApp(ctk.CTk):
+    """Main application window."""
 
-    def __init__(self, master, **kwargs):
-        super().__init__(master, **kwargs)
-        self.configure(
-            fg_color=COLORS["bg_card"],
-            corner_radius=16,
-            border_width=1,
-            border_color=COLORS["border"]
-        )
+    def __init__(self):
+        super().__init__()
 
-        # ── Header ──
-        self.header = ctk.CTkLabel(
-            self, text="DÉTAILS DE TARIFICATION",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color=COLORS["text_muted"]
-        )
-        self.header.pack(pady=(20, 5), padx=20, anchor="w")
+        self.db = DatabaseQuery()
+        self.db_mgr = DatabaseManager()
+        self.title("CPQ — Configuration, Prix, Devis")
 
-        self.product_label = ctk.CTkLabel(
-            self, text="Sélectionner une configuration de produit",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-            text_color=COLORS["text_primary"]
-        )
-        self.product_label.pack(pady=(0, 15), padx=20, anchor="w")
-
-        # ── Separator ──
-        self.sep = ctk.CTkFrame(self, height=1, fg_color=COLORS["border"])
-        self.sep.pack(fill="x", padx=20, pady=5)
-
-        # ── PR (Cost) Section ──
-        self.pr_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.pr_frame.pack(fill="x", padx=20, pady=(15, 5))
-
-        self.pr_label = ctk.CTkLabel(
-            self.pr_frame, text="PR  ·  PRIX DE REVIENT (COÛT)",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=COLORS["text_secondary"]
-        )
-        self.pr_label.pack(anchor="w")
-
-        self.pr_value = ctk.CTkLabel(
-            self.pr_frame, text="— DA",
-            font=ctk.CTkFont(family="Segoe UI", size=36, weight="bold"),
-            text_color=COLORS["pr_color"]
-        )
-        self.pr_value.pack(anchor="w", pady=(2, 0))
-
-        # ── Dimension Details ──
-        self.detail_frame = ctk.CTkFrame(
-            self, fg_color=COLORS["bg_dark"], corner_radius=12
-        )
-        self.detail_frame.pack(fill="x", padx=20, pady=(20, 10))
-
-        self.detail_header = ctk.CTkLabel(
-            self.detail_frame, text="DIMENSIONS",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=COLORS["text_muted"]
-        )
-        self.detail_header.pack(pady=(12, 2), padx=15, anchor="w")
-
-        self.detail_dims = ctk.CTkLabel(
-            self.detail_frame, text="—",
-            font=ctk.CTkFont(family="Segoe UI", size=14),
-            text_color=COLORS["text_secondary"]
-        )
-        self.detail_dims.pack(pady=(0, 12), padx=15, anchor="w")
-
-        # ── BOM Separator ──
-        self.bom_sep = ctk.CTkFrame(self, height=1, fg_color=COLORS["border"])
-        self.bom_sep.pack(fill="x", padx=20, pady=(10, 5))
-
-        # ── BOM Header ──
-        self.bom_header = ctk.CTkLabel(
-            self, text="COMPOSANTS",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color=COLORS["text_muted"]
-        )
-        self.bom_header.pack(pady=(5, 5), padx=20, anchor="w")
-
-        # ── BOM Scrollable Frame ──
-        self.bom_frame = ctk.CTkScrollableFrame(
-            self, height=200,
-            fg_color=COLORS["bg_dark"],
-            corner_radius=12
-        )
-        self.bom_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
-
-    def update_card(self, product_data, components=None):
-        """Update card with product tuple: (cat, dim, w, h, color, cost, ...)."""
-        if not product_data:
-            self.clear_card()
-            return
-
-        cat, dim, w, h, color, cost = product_data[:6]
-
-        # Product title
-        cat_names = {
-            "GSD": "Grille Simple Déflexion",
-            "GDD": "Grille Double Déflexion",
-            "GBF": "Grille à Barre Fixe"
-        }
-        title = f"{cat_names.get(cat, cat)} — {color}"
-        self.product_label.configure(text=title)
-
-        # PR
-        if cost is not None:
-            self.pr_value.configure(text=f"{cost:,.2f} DA")
-        else:
-            self.pr_value.configure(text="N/A")
-
-        # Dimensions — parse dimension string for geometry type
-        dim_str = str(dim) if dim else ""
-        if dim_str.startswith("Ø"):
-            # RMB: ØDiamètre*Hauteur
-            parts = dim_str[1:].split("*")
-            if len(parts) == 2:
-                self.detail_dims.configure(text=f"Diamètre: {parts[0]} mm  ×  Hauteur: {parts[1]} mm")
-            else:
-                self.detail_dims.configure(text=f"Diamètre: {dim_str[1:]} mm")
-        elif dim_str.count("*") == 2:
-            # Tôle: Largeur*Profondeur*Hauteur
-            parts = dim_str.split("*")
-            self.detail_dims.configure(text=f"L: {parts[0]} mm  ×  P: {parts[1]} mm  ×  H: {parts[2]} mm")
-        else:
-            # Legacy: Largeur*Hauteur
-            self.detail_dims.configure(text=f"L: {w} mm  ×  H: {h} mm")
-
-        # BOM
-        if components:
-            self.update_bom(components)
-
-    def update_bom(self, components):
-        """Populate the BOM breakdown with component rows."""
-        self.clear_bom()
-
-        for name, qty, unit_price, subtotal in components:
-            row = ctk.CTkFrame(self.bom_frame, fg_color="transparent")
-            row.pack(fill="x", pady=2)
-
-            ctk.CTkLabel(
-                row, text=name,
-                font=ctk.CTkFont(family="Segoe UI", size=13),
-                text_color=COLORS["text_secondary"]
-            ).pack(side="left", padx=(5, 0))
-
-            price_text = f"{subtotal:.2f} DA" if subtotal is not None else "—"
-            ctk.CTkLabel(
-                row, text=price_text,
-                font=ctk.CTkFont(family="Segoe UI", size=13),
-                text_color=COLORS["text_primary"]
-            ).pack(side="right", padx=(0, 5))
-
-        # ── Total separator ──
-        ctk.CTkFrame(
-            self.bom_frame, height=1, fg_color=COLORS["border"]
-        ).pack(fill="x", padx=5, pady=(8, 4))
-
-        # ── Total row ──
-        total = sum(s for _, _, _, s in components if s is not None)
-        total_row = ctk.CTkFrame(self.bom_frame, fg_color="transparent")
-        total_row.pack(fill="x", pady=(2, 4))
-
-        ctk.CTkLabel(
-            total_row, text="TOTAL",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color=COLORS["accent"]
-        ).pack(side="left", padx=(5, 0))
-
-        ctk.CTkLabel(
-            total_row, text=f"{total:.2f} DA",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color=COLORS["accent"]
-        ).pack(side="right", padx=(0, 5))
-
-    def clear_bom(self):
-        """Clear all children in the BOM frame."""
-        for widget in self.bom_frame.winfo_children():
-            widget.destroy()
-
-    def clear_card(self):
-        self.product_label.configure(text="Sélectionner une configuration de produit")
-        self.pr_value.configure(text="— DA")
-        self.detail_dims.configure(text="L: —  ×  H: —")
-        self.clear_bom()
-
-class AdminWindow(ctk.CTkToplevel):
-    """Admin Panel with tabbed layout: Pricing editor + Product CRUD management."""
-
-    def __init__(self, master, refresh_callback=None):
-        super().__init__(master)
-        self.title("Administration — Gestion des produits et de la tarification")
-        self.configure(fg_color=COLORS["bg_dark"])
-
-        # ── Screen-aware sizing ──
+        # ── Screen-aware sizing + DPI scaling ──
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
-        win_w = max(680, int(screen_w * 0.45))
-        win_h = max(750, int(screen_h * 0.8))
+
+        # Scale factor: everything is designed for 1080p (1920x1080).
+        REF_W, REF_H = 1920, 1080
+        scale_w = screen_w / REF_W
+        scale_h = screen_h / REF_H
+        scale_factor = min(scale_w, scale_h)
+        scale_factor = max(0.65, min(scale_factor, 1.6))
+
+        ctk.set_widget_scaling(scale_factor)
+        ctk.set_window_scaling(scale_factor)
+
+        win_w = max(int(1200 * scale_factor), int(screen_w * 0.75))
+        win_h = max(int(800 * scale_factor), int(screen_h * 0.85))
+        win_w = min(win_w, screen_w - 40)
+        win_h = min(win_h, screen_h - 80)
         x = (screen_w - win_w) // 2
         y = (screen_h - win_h) // 2
         self.geometry(f"{win_w}x{win_h}+{x}+{y}")
-        self.minsize(680, 750)
+        self.minsize(int(1000 * scale_factor), int(700 * scale_factor))
+        self.configure(fg_color=COLORS["bg_dark"])
 
-        self.transient(master)
-        self.grab_set()
-        self.lift()
-        self.after(100, self.focus_force)
-        self.refresh_callback = refresh_callback
-        self.db_mgr = DatabaseManager()
+        # State
+        self._selected_category = None
+        self._selected_color = None
+        self._dimensions_cache = []
+        self._active_tab = "catalogue"
+        self._calc_loaded = False
+        self._admin_loaded = False
 
-        # ── Title ──
-        ctk.CTkLabel(
-            self, text="⚙  PANNEAU D'ADMINISTRATION",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
+        self._build_layout()
+        self._populate_categories()
+
+    def _build_layout(self):
+        # 1. HEADER BAR
+        self.top_bar = ctk.CTkFrame(self, height=56, fg_color=COLORS["bg_card"], corner_radius=0)
+        self.top_bar.pack(fill="x")
+        self.top_bar.pack_propagate(False)
+
+        logo_frame = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        logo_frame.pack(side="left", padx=24, pady=10)
+
+        # Orange square logo with dark "H"
+        self.logo_square = ctk.CTkLabel(
+            logo_frame, text="H", width=28, height=28,
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            fg_color=COLORS["accent"], text_color=COLORS["bg_dark"], corner_radius=4
+        )
+        self.logo_square.pack(side="left", padx=(0, 10))
+
+        # HACHANI bold white
+        self.logo_text = ctk.CTkLabel(
+            logo_frame, text="HACHANI",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        self.logo_text.pack(side="left", padx=(0, 6))
+
+        # Subtitle
+        self.logo_sub = ctk.CTkLabel(
+            logo_frame, text="CONFIGURATION PRIX DEVIS",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        )
+        self.logo_sub.pack(side="left", pady=(4, 0))
+
+        self.status_label = ctk.CTkLabel(
+            self.top_bar, text="",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        )
+        self.status_label.pack(side="right", padx=24)
+        self._update_status_count()
+
+        # 2. HERO SECTION
+        self.hero_section = ctk.CTkFrame(self, height=90, fg_color=COLORS["bg_dark"], corner_radius=0)
+        self.hero_section.pack(fill="x", padx=24, pady=(20, 10))
+        self.hero_section.pack_propagate(False)
+
+        self.hero_left = ctk.CTkFrame(self.hero_section, fg_color="transparent")
+        self.hero_left.pack(side="left", fill="y")
+        
+        self.hero_kicker = ctk.CTkLabel(
+            self.hero_left, text="CATALOGUE DE PRIX",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             text_color=COLORS["accent"]
-        ).pack(pady=(16, 2), padx=24, anchor="w")
+        )
+        self.hero_kicker.pack(anchor="w")
 
-        ctk.CTkLabel(
-            self, text="Gérer la tarification des produits et le catalogue",
+        self.hero_title = ctk.CTkLabel(
+            self.hero_left, text="GRILLES\nALUMINIUM", justify="left",
+            font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        self.hero_title.pack(anchor="w", pady=(0, 0))
+
+        self.hero_right = ctk.CTkFrame(self.hero_section, fg_color="transparent")
+        self.hero_right.pack(side="right", fill="y", pady=(10, 0))
+
+        self.hero_desc = ctk.CTkLabel(
+            self.hero_right, text="Recherchez et configurez des produits dans\nle catalogue de prix HACHANI.",
+            justify="right",
             font=ctk.CTkFont(family="Segoe UI", size=12),
             text_color=COLORS["text_secondary"]
-        ).pack(pady=(0, 8), padx=24, anchor="w")
+        )
+        self.hero_desc.pack(anchor="e")
 
-        # ── Main Content Area ──
-        self.main_content = ctk.CTkFrame(self, fg_color=COLORS["bg_card"], corner_radius=12)
-        self.main_content.pack(fill="both", expand=True, padx=24, pady=(0, 8))
+        # 3. HORIZONTAL TAB STEPPER
+        self.tab_stepper = ctk.CTkFrame(self, height=44, fg_color="transparent", corner_radius=0)
+        self.tab_stepper.pack(fill="x", padx=24, pady=(0, 20))
         
-        self._build_products_tab()
+        self.btn_catalogue = ctk.CTkButton(
+            self.tab_stepper, text="🔧  CATALOGUE", height=40, width=160,
+            command=lambda: self._switch_tab("catalogue"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6
+        )
+        self.btn_catalogue.pack(side="left", padx=(0, 8))
 
-        # ── Bottom: Checkpoints & Restore ──
-        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
-        bottom_frame.pack(fill="x", padx=24, pady=(0, 12))
+        self.btn_calculateur = ctk.CTkButton(
+            self.tab_stepper, text="⚙  CALCULATEUR", height=40, width=160,
+            command=lambda: self._switch_tab("calculateur"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6
+        )
+        self.btn_calculateur.pack(side="left", padx=(0, 8))
+
+        self.btn_admin = ctk.CTkButton(
+            self.tab_stepper, text="🛠  ADMINISTRATION", height=40, width=160,
+            command=lambda: self._switch_tab("administration"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6
+        )
+        self.btn_admin.pack(side="left")
+
+        self.step_indicator = ctk.CTkLabel(
+            self.tab_stepper, text="MODULE 1 / 3",
+            font=ctk.CTkFont(family="Consolas", size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        )
+        self.step_indicator.pack(side="right", padx=10)
+
+        # 4. CONTENT AREA
+        self.content_area = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_area.pack(fill="both", expand=True, padx=24, pady=(0, 20))
+
+        # Create frames for each tab
+        self.catalogue_frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.calculator_frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.admin_frame = ctk.CTkFrame(self.content_area, fg_color="transparent")
+
+        self._build_catalogue_tab()
         
-        self.cp_status = ctk.CTkLabel(
-            bottom_frame, text="",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
+        # 5. FOOTER
+        self.footer = ctk.CTkFrame(self, height=40, fg_color="transparent")
+        self.footer.pack(fill="x", padx=24, pady=(0, 10))
+        self.footer.pack_propagate(False)
+
+        self.footer_sep = ctk.CTkFrame(self.footer, height=1, fg_color=COLORS["border"])
+        self.footer_sep.pack(fill="x", pady=(0, 8))
+
+        ctk.CTkLabel(
+            self.footer, text="© 2026 HACHANI — USAGE INTERNE UNIQUEMENT",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
             text_color=COLORS["text_muted"]
-        )
-        self.cp_status.pack(side="top", pady=(0, 4))
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            self.footer, text="DOCUMENT CONFIDENTIEL",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color=COLORS["warning"]
+        ).pack(side="right")
+
+        # Initialize to catalogue tab
+        self._switch_tab("catalogue")
+
+    def _update_status_count(self):
+        try:
+            count = self.db.get_product_count()
+            self.status_label.configure(text=f"{count} PRODUITS")
+        except Exception:
+            self.status_label.configure(text="⚠ ERREUR BDD")
+
+    def _switch_tab(self, tab_name):
+        self._active_tab = tab_name
         
-        btn_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
-        btn_frame.pack(side="top")
+        for frame in [self.catalogue_frame, self.calculator_frame, self.admin_frame]:
+            frame.pack_forget()
 
-        self.pr_checkpoint_btn = ctk.CTkButton(
-            btn_frame, text="📌 Créer un point de sauvegarde", height=32,
-            fg_color=COLORS["accent_dim"], hover_color=COLORS["accent"],
-            command=self._create_manual_checkpoint
+        if tab_name == "catalogue":
+            self.catalogue_frame.pack(fill="both", expand=True)
+            self.hero_kicker.configure(text="CATALOGUE DE PRIX")
+            self.hero_title.configure(text="GRILLES\nALUMINIUM")
+            self.hero_desc.configure(text="Recherchez et configurez des produits dans\nle catalogue de prix HACHANI.")
+            self.step_indicator.configure(text="MODULE 1 / 3")
+            
+            self.btn_catalogue.configure(fg_color=COLORS["accent"], text_color=COLORS["bg_dark"], hover_color=COLORS["accent_hover"])
+            self.btn_calculateur.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            self.btn_admin.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            
+        elif tab_name == "calculateur":
+            if not self._calc_loaded:
+                self._build_calculator_tab()
+                self._calc_loaded = True
+            
+            self.calculator_frame.pack(fill="both", expand=True)
+            self.hero_kicker.configure(text="NOUVEAU PRODUIT")
+            self.hero_title.configure(text="CALCULATEUR\nDE PRIX")
+            self.hero_desc.configure(text="Créez et évaluez de nouveaux produits avec\nle calculateur de coûts de production.")
+            self.step_indicator.configure(text="MODULE 2 / 3")
+            
+            self.btn_catalogue.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            self.btn_calculateur.configure(fg_color=COLORS["accent"], text_color=COLORS["bg_dark"], hover_color=COLORS["accent_hover"])
+            self.btn_admin.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            
+        elif tab_name == "administration":
+            if not self._admin_loaded:
+                self._build_admin_tab()
+                self._admin_loaded = True
+                
+            self.admin_frame.pack(fill="both", expand=True)
+            self.hero_kicker.configure(text="GESTION DES PRODUITS")
+            self.hero_title.configure(text="PANNEAU\nD'ADMINISTRATION")
+            self.hero_desc.configure(text="Modifiez, supprimez et gérez les points de\nsauvegarde du catalogue de prix.")
+            self.step_indicator.configure(text="MODULE 3 / 3")
+            
+            self.btn_catalogue.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            self.btn_calculateur.configure(fg_color=COLORS["bg_card"], text_color=COLORS["text_secondary"], hover_color=COLORS["bg_card_hover"])
+            self.btn_admin.configure(fg_color=COLORS["accent"], text_color=COLORS["bg_dark"], hover_color=COLORS["accent_hover"])
+
+    # ─── CATALOGUE TAB ───────────────────────────────────────────────────────
+    def _build_catalogue_tab(self):
+        self.catalogue_frame.columnconfigure(0, weight=65, uniform="col")
+        self.catalogue_frame.columnconfigure(1, weight=35, uniform="col")
+        self.catalogue_frame.rowconfigure(0, weight=1)
+
+        # Left Column (~65%)
+        self.cat_left = ctk.CTkFrame(
+            self.catalogue_frame, fg_color="transparent",
+            border_width=1, border_color=COLORS["border"], corner_radius=10
         )
-        self.pr_checkpoint_btn.pack(side="left", padx=5)
+        self.cat_left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
-        self.pr_restore_btn = ctk.CTkButton(
-            btn_frame, text="🕒 Restaurer les données", height=32,
-            fg_color="transparent", hover_color=COLORS["bg_card_hover"],
-            border_width=1, border_color=COLORS["warning"],
-            text_color=COLORS["warning"],
-            command=self._open_restore_dialog
-        )
-        self.pr_restore_btn.pack(side="left", padx=5)
+        cat_left_content = ctk.CTkFrame(self.cat_left, fg_color="transparent")
+        cat_left_content.pack(fill="both", expand=True, padx=30, pady=30)
 
-        self._update_cp_status()
+        hdr_frame = ctk.CTkFrame(cat_left_content, fg_color="transparent")
+        hdr_frame.pack(fill="x", pady=(0, 20))
+        
+        ctk.CTkLabel(
+            hdr_frame, text="🔧", font=ctk.CTkFont(size=20), text_color=COLORS["accent"]
+        ).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkLabel(
+            hdr_frame, text="SÉLECTION PRODUIT",
+            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(side="left")
 
-    def _build_products_tab(self):
-        tab = self.main_content
-        self._pd_product_id = None
-        self._pd_dim_map = {}
-        self._pd_comp_vars = []
-        self._pd_mode = None  # "new" or "edit"
-
-        # ── Mode Buttons: New vs Edit/Delete ──
-        mode_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        mode_frame.pack(fill="x", padx=12, pady=(12, 6))
-
-        self.pd_new_btn = ctk.CTkButton(
-            mode_frame, text="➕  Nouveau Produit", height=36,
-            fg_color=COLORS["success"], hover_color="#2ab883",
-            text_color=COLORS["bg_dark"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._pd_show_new_form
-        )
-        self.pd_new_btn.pack(side="left", padx=(0, 8))
-
-        self.pd_edit_btn = ctk.CTkButton(
-            mode_frame, text="✏  Modifier Produit", height=36,
-            fg_color=COLORS["accent_dim"], hover_color=COLORS["accent"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._pd_show_edit_form
-        )
-        self.pd_edit_btn.pack(side="left", padx=(0, 8))
-
-        self.pd_delete_btn = ctk.CTkButton(
-            mode_frame, text="🗑  Supprimer", height=36,
-            fg_color="transparent", hover_color=COLORS["error"],
-            border_width=1, border_color=COLORS["error"],
-            text_color=COLORS["error"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._pd_delete_product, state="disabled"
-        )
-        self.pd_delete_btn.pack(side="right")
-
-        # ── Dynamic Content Area ──
-        self.pd_content_frame = ctk.CTkFrame(tab, fg_color="transparent")
-        self.pd_content_frame.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-
-        self._pd_show_welcome()
-
-        # ── Status ──
-        self.pd_status = ctk.CTkLabel(
-            tab, text="",
+        ctk.CTkLabel(
+            cat_left_content, text="Rechercher ou configurer via les listes déroulantes",
             font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color=COLORS["text_secondary"]
+        ).pack(anchor="w", pady=(0, 20))
+
+        # Search Bar
+        self.search_frame = ctk.CTkFrame(cat_left_content, fg_color="transparent")
+        self.search_frame.pack(fill="x", pady=(0, 8))
+
+        self.search_entry = ctk.CTkEntry(
+            self.search_frame,
+            placeholder_text="🔍 Rechercher une dimension (ex: 600*60)...",
+            height=44,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color=COLORS["bg_input"],
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            corner_radius=6
+        )
+        self.search_entry.pack(fill="x")
+        self.search_entry.bind("<KeyRelease>", self._on_search_change)
+
+        self.search_results_frame = ctk.CTkScrollableFrame(
+            cat_left_content, height=0, fg_color=COLORS["bg_card"], corner_radius=6
+        )
+        self._search_visible = False
+
+        ctk.CTkFrame(cat_left_content, height=1, fg_color=COLORS["border"]).pack(fill="x", pady=(20, 20))
+
+        # Cascading Dropdowns
+        self._make_dropdown_label(cat_left_content, "CATÉGORIE")
+        self.category_var = ctk.StringVar(value="Sélectionner une catégorie...")
+        self.category_menu = ctk.CTkOptionMenu(
+            cat_left_content, variable=self.category_var, values=["Chargement..."],
+            command=self._on_category_change, height=44,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"],
+            dropdown_fg_color=COLORS["bg_card"], dropdown_hover_color=COLORS["bg_card_hover"],
+            corner_radius=6
+        )
+        self.category_menu.pack(fill="x", pady=(0, 16))
+
+        self._make_dropdown_label(cat_left_content, "COULEUR")
+        self.color_var = ctk.StringVar(value="Sélectionner une couleur...")
+        self.color_menu = ctk.CTkOptionMenu(
+            cat_left_content, variable=self.color_var, values=["—"],
+            command=self._on_color_change, height=44,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"],
+            dropdown_fg_color=COLORS["bg_card"], dropdown_hover_color=COLORS["bg_card_hover"],
+            corner_radius=6, state="disabled"
+        )
+        self.color_menu.pack(fill="x", pady=(0, 16))
+
+        self._make_dropdown_label(cat_left_content, "DIMENSION")
+        self.dim_var = ctk.StringVar(value="Sélectionner une dimension...")
+        self.dim_menu = ctk.CTkOptionMenu(
+            cat_left_content, variable=self.dim_var, values=["—"],
+            command=self._on_dimension_change, height=44,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"],
+            dropdown_fg_color=COLORS["bg_card"], dropdown_hover_color=COLORS["bg_card_hover"],
+            corner_radius=6, state="disabled"
+        )
+        self.dim_menu.pack(fill="x", pady=(0, 24))
+
+        self.reset_btn = ctk.CTkButton(
+            cat_left_content, text="RÉINITIALISER",
+            command=self._reset_all, height=40,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            fg_color="transparent", border_width=1, border_color=COLORS["border"],
+            hover_color=COLORS["bg_card_hover"], text_color=COLORS["text_muted"],
+            corner_radius=6
+        )
+        self.reset_btn.pack(fill="x", pady=(0, 10))
+
+        self.selector_status = ctk.CTkLabel(
+            cat_left_content, text="",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
             text_color=COLORS["text_muted"]
         )
-        self.pd_status.pack(pady=(0, 6))
+        self.selector_status.pack(anchor="w")
 
-    def _pd_clear_content(self):
-        for w in self.pd_content_frame.winfo_children():
-            w.destroy()
+        # Right Column (~35%)
+        self.cat_right = ctk.CTkFrame(self.catalogue_frame, fg_color="transparent")
+        self.cat_right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
-    def _pd_show_welcome(self):
-        self._pd_clear_content()
-        self._pd_mode = None
-        self._pd_product_id = None
-        self.pd_delete_btn.configure(state="disabled")
-
-        msg = ctk.CTkLabel(
-            self.pd_content_frame,
-            text="Choisissez une action ci-dessus :\n\n➕  Nouveau Produit — créer une nouvelle entrée dans le catalogue\n✏  Modifier Produit — modifier les détails et les composants d'un produit\n🗑  Supprimer — retirer un produit du catalogue",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color=COLORS["text_secondary"],
-            justify="left"
+        # Card 0: IMAGE
+        self.card_img = ctk.CTkFrame(self.cat_right, fg_color=COLORS["bg_card"], corner_radius=10)
+        self.card_img.pack(fill="x", pady=(0, 10))
+        
+        c0_content = ctk.CTkFrame(self.card_img, fg_color="transparent")
+        c0_content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            c0_content, text="APERÇU DU PRODUIT",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(anchor="w", pady=(0, 10))
+        
+        self.lbl_image = ctk.CTkLabel(
+            c0_content, text="Aucune image",
+            font=ctk.CTkFont(family="Segoe UI", size=12, slant="italic"),
+            text_color=COLORS["text_muted"]
         )
-        msg.pack(pady=40, padx=20)
+        self.lbl_image.pack(anchor="center")
 
-    # ─── NEW PRODUCT FORM ────────────────────────────────────────────────────
+        # Card 1: PRIX DE REVIENT
+        self.card_prix = ctk.CTkFrame(self.cat_right, fg_color=COLORS["bg_card"], corner_radius=10)
+        self.card_prix.pack(fill="x", pady=(0, 10))
+        
+        c1_content = ctk.CTkFrame(self.card_prix, fg_color="transparent")
+        c1_content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            c1_content, text="PRIX DE REVIENT",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(anchor="w")
+        
+        self.lbl_product_sub = ctk.CTkLabel(
+            c1_content, text="SÉLECTIONNER UN PRODUIT",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        )
+        self.lbl_product_sub.pack(anchor="w", pady=(4, 15))
+        
+        self.lbl_prix = ctk.CTkLabel(
+            c1_content, text="— DA",
+            font=ctk.CTkFont(family="Consolas", size=32, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        self.lbl_prix.pack(anchor="w")
 
-    def _pd_show_new_form(self):
-        self._pd_clear_content()
-        self._pd_mode = "new"
-        self._pd_product_id = None
-        self.pd_delete_btn.configure(state="disabled")
-        self.pd_new_btn.configure(fg_color=COLORS["success"])
-        self.pd_edit_btn.configure(fg_color=COLORS["accent_dim"])
+        # Card 2: COMPOSANTS
+        self.card_comp = ctk.CTkFrame(self.cat_right, fg_color=COLORS["bg_card"], corner_radius=10)
+        self.card_comp.pack(fill="both", expand=True, pady=(0, 10))
+        
+        c2_content = ctk.CTkFrame(self.card_comp, fg_color="transparent")
+        c2_content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            c2_content, text="COMPOSANTS",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(anchor="w", pady=(0, 10))
+        
+        self.bom_list = ctk.CTkScrollableFrame(c2_content, fg_color="transparent")
+        self.bom_list.pack(fill="both", expand=True)
 
+        # Card 3: DIMENSIONS
+        self.card_dim = ctk.CTkFrame(self.cat_right, fg_color=COLORS["bg_card"], corner_radius=10)
+        self.card_dim.pack(fill="x")
+        
+        c3_content = ctk.CTkFrame(self.card_dim, fg_color="transparent")
+        c3_content.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        ctk.CTkLabel(
+            c3_content, text="DIMENSIONS",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        self.lbl_dims = ctk.CTkLabel(
+            c3_content, text="—",
+            font=ctk.CTkFont(family="Consolas", size=14),
+            text_color=COLORS["text_primary"]
+        )
+        self.lbl_dims.pack(anchor="w")
+
+    def _make_dropdown_label(self, parent, text):
+        f = ctk.CTkFrame(parent, fg_color="transparent")
+        f.pack(fill="x")
+        ctk.CTkLabel(
+            f, text=text,
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["text_primary"]
+        ).pack(side="left")
+        ctk.CTkLabel(
+            f, text=" *",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(side="left")
+
+    # ─── CALCULATEUR TAB ─────────────────────────────────────────────────────
+    def _build_calculator_tab(self):
         try:
             from calculator_gui import CalculatorFrame
-            calc_frame = CalculatorFrame(self.pd_content_frame, self.db_mgr, refresh_callback=self.refresh_callback)
-            calc_frame.pack(fill="both", expand=True)
+            self.calc_instance = CalculatorFrame(self.calculator_frame, self.db_mgr, refresh_callback=self.refresh_view)
+            self.calc_instance.pack(fill="both", expand=True)
         except Exception as e:
             err_msg = traceback.format_exc()
             messagebox.showerror("Erreur — Nouveau Produit", f"Impossible de charger le calculateur :\n\n{err_msg}", parent=self)
 
-    # ─── EDIT EXISTING PRODUCT ───────────────────────────────────────────────
+    # ─── ADMINISTRATION TAB ──────────────────────────────────────────────────
+    def _build_admin_tab(self):
+        self._pd_product_id = None
+        self._pd_dim_map = {}
+        self._pd_comp_vars = []
+        
+        # Container
+        admin_content = ctk.CTkFrame(self.admin_frame, fg_color=COLORS["bg_card"], corner_radius=10)
+        admin_content.pack(fill="both", expand=True)
+        
+        # Mode Buttons
+        mode_frame = ctk.CTkFrame(admin_content, fg_color="transparent")
+        mode_frame.pack(fill="x", padx=20, pady=20)
+        
+        self.pd_edit_btn = ctk.CTkButton(
+            mode_frame, text="✏ MODIFIER PRODUIT", height=40,
+            fg_color=COLORS["accent"], text_color=COLORS["bg_dark"], hover_color=COLORS["accent_hover"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6, command=self._pd_show_edit_form
+        )
+        self.pd_edit_btn.pack(side="left", padx=(0, 10))
+        
+        self.pd_delete_btn = ctk.CTkButton(
+            mode_frame, text="🗑 SUPPRIMER", height=40,
+            fg_color="transparent", hover_color=COLORS["error"],
+            border_width=1, border_color=COLORS["error"], text_color=COLORS["error"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            corner_radius=6, command=self._pd_delete_product, state="disabled"
+        )
+        self.pd_delete_btn.pack(side="right")
+        
+        # Edit Area
+        self.pd_content_frame = ctk.CTkFrame(admin_content, fg_color="transparent")
+        self.pd_content_frame.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        
+        # Checkpoints Area
+        cp_frame = ctk.CTkFrame(admin_content, fg_color="transparent")
+        cp_frame.pack(fill="x", padx=20, pady=20)
+        
+        ctk.CTkFrame(cp_frame, height=1, fg_color=COLORS["border"]).pack(fill="x", pady=(0, 15))
+        
+        self.cp_status = ctk.CTkLabel(
+            cp_frame, text="", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        )
+        self.cp_status.pack(side="top", pady=(0, 10))
+        
+        btn_frame = ctk.CTkFrame(cp_frame, fg_color="transparent")
+        btn_frame.pack(side="top")
+        
+        ctk.CTkButton(
+            btn_frame, text="📌 CRÉER POINT SAUVEGARDE", height=36,
+            fg_color=COLORS["accent_dim"], text_color=COLORS["text_primary"], hover_color=COLORS["accent"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6, command=self._create_manual_checkpoint
+        ).pack(side="left", padx=(0, 10))
+        
+        ctk.CTkButton(
+            btn_frame, text="🕒 RESTAURER DONNÉES", height=36,
+            fg_color="transparent", text_color=COLORS["warning"], hover_color=COLORS["bg_card_hover"],
+            border_width=1, border_color=COLORS["warning"],
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            corner_radius=6, command=self._open_restore_dialog
+        ).pack(side="left")
+        
+        self.pd_status = ctk.CTkLabel(
+            admin_content, text="", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["text_muted"]
+        )
+        self.pd_status.pack(pady=(0, 10))
+
+        self._update_cp_status()
+        self._pd_show_edit_form()
+
+    # ─── ADMIN: EDIT FORM ────────────────────────────────────────────────────
+    def _pd_clear_content(self):
+        for w in self.pd_content_frame.winfo_children():
+            w.destroy()
 
     def _pd_show_edit_form(self):
         self._pd_clear_content()
-        self._pd_mode = "edit"
         self._pd_product_id = None
         self._pd_comp_vars = []
         self.pd_delete_btn.configure(state="disabled")
-        self.pd_new_btn.configure(fg_color=COLORS["accent_dim"])
-        self.pd_edit_btn.configure(fg_color=COLORS["accent"])
 
         container = self.pd_content_frame
 
-        # ── Selector ──
-        sel = ctk.CTkFrame(container, fg_color=COLORS["bg_dark"], corner_radius=12)
-        sel.pack(fill="x", pady=(0, 8))
+        sel = ctk.CTkFrame(container, fg_color="transparent")
+        sel.pack(fill="x", pady=(0, 10))
+        
+        ctk.CTkLabel(
+            sel, text="SÉLECTIONNER LE PRODUIT À MODIFIER",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(anchor="w", pady=(0, 10))
 
-        ctk.CTkLabel(sel, text="SÉLECTIONNER LE PRODUIT À MODIFIER",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=COLORS["accent"]).pack(pady=(10, 6), padx=14, anchor="w")
+        row_sel = ctk.CTkFrame(sel, fg_color="transparent")
+        row_sel.pack(fill="x")
+        row_sel.columnconfigure((0, 1, 2), weight=1, uniform="sel")
 
         # Category
-        ctk.CTkLabel(sel, text="CATÉGORIE", font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(pady=(2, 1), padx=14, anchor="w")
+        f_cat = ctk.CTkFrame(row_sel, fg_color="transparent")
+        f_cat.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        ctk.CTkLabel(f_cat, text="CATÉGORIE", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", pady=(0, 2))
         categories = self.db_mgr.get_categories()
-        self._pd_edit_cat_map = {f"{c}  —  {n}": c for c, n in categories}
-        self.pd_edit_cat_var = ctk.StringVar(value="Sélectionner une catégorie...")
+        self._pd_edit_cat_map = {f"{c} — {n}": c for c, n in categories}
+        self.pd_edit_cat_var = ctk.StringVar(value="Catégorie...")
         ctk.CTkOptionMenu(
-            sel, variable=self.pd_edit_cat_var, values=list(self._pd_edit_cat_map.keys()),
-            command=self._pd_edit_on_cat, height=32,
-            fg_color=COLORS["bg_card"], button_color=COLORS["accent_dim"], corner_radius=8
-        ).pack(fill="x", padx=14, pady=(0, 4))
+            f_cat, variable=self.pd_edit_cat_var, values=list(self._pd_edit_cat_map.keys()),
+            command=self._pd_edit_on_cat, height=36,
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"], corner_radius=6
+        ).pack(fill="x")
 
         # Color
-        ctk.CTkLabel(sel, text="COULEUR", font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(pady=(2, 1), padx=14, anchor="w")
-        self.pd_edit_color_var = ctk.StringVar(value="Sélectionner une couleur...")
+        f_col = ctk.CTkFrame(row_sel, fg_color="transparent")
+        f_col.grid(row=0, column=1, sticky="nsew", padx=5)
+        ctk.CTkLabel(f_col, text="COULEUR", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", pady=(0, 2))
+        self.pd_edit_color_var = ctk.StringVar(value="Couleur...")
         self.pd_edit_color_menu = ctk.CTkOptionMenu(
-            sel, variable=self.pd_edit_color_var, values=["—"],
-            command=self._pd_edit_on_color, height=32, state="disabled",
-            fg_color=COLORS["bg_card"], button_color=COLORS["accent_dim"], corner_radius=8
+            f_col, variable=self.pd_edit_color_var, values=["—"],
+            command=self._pd_edit_on_color, height=36, state="disabled",
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"], corner_radius=6
         )
-        self.pd_edit_color_menu.pack(fill="x", padx=14, pady=(0, 4))
+        self.pd_edit_color_menu.pack(fill="x")
 
         # Dimension
-        ctk.CTkLabel(sel, text="DIMENSION", font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(pady=(2, 1), padx=14, anchor="w")
-        self.pd_edit_dim_var = ctk.StringVar(value="Sélectionner une dimension...")
+        f_dim = ctk.CTkFrame(row_sel, fg_color="transparent")
+        f_dim.grid(row=0, column=2, sticky="nsew", padx=(5, 0))
+        ctk.CTkLabel(f_dim, text="DIMENSION", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(anchor="w", pady=(0, 2))
+        self.pd_edit_dim_var = ctk.StringVar(value="Dimension...")
         self.pd_edit_dim_menu = ctk.CTkOptionMenu(
-            sel, variable=self.pd_edit_dim_var, values=["—"],
-            command=self._pd_edit_on_dim, height=32, state="disabled",
-            fg_color=COLORS["bg_card"], button_color=COLORS["accent_dim"], corner_radius=8
+            f_dim, variable=self.pd_edit_dim_var, values=["—"],
+            command=self._pd_edit_on_dim, height=36, state="disabled",
+            fg_color=COLORS["bg_input"], button_color=COLORS["bg_input"],
+            button_hover_color=COLORS["bg_card_hover"], corner_radius=6
         )
-        self.pd_edit_dim_menu.pack(fill="x", padx=14, pady=(0, 10))
+        self.pd_edit_dim_menu.pack(fill="x")
 
-        # ── Edit Area (populated after product selected) ──
         self.pd_edit_area = ctk.CTkFrame(container, fg_color="transparent")
         self.pd_edit_area.pack(fill="both", expand=True)
 
         ctk.CTkLabel(
             self.pd_edit_area, text="Sélectionnez un produit ci-dessus pour le modifier",
-            font=ctk.CTkFont(size=13), text_color=COLORS["text_muted"]
-        ).pack(pady=30)
+            font=ctk.CTkFont(family="Segoe UI", size=13), text_color=COLORS["text_muted"]
+        ).pack(pady=40)
 
     def _pd_edit_on_cat(self, selection):
         code = self._pd_edit_cat_map.get(selection)
         if not code:
             return
         self._pd_edit_sel_cat = code
-        self.pd_edit_color_var.set("Sélectionner une couleur...")
-        self.pd_edit_dim_var.set("Sélectionner une dimension...")
+        self.pd_edit_color_var.set("Couleur...")
+        self.pd_edit_dim_var.set("Dimension...")
         self.pd_edit_dim_menu.configure(state="disabled", values=["—"])
         self._pd_product_id = None
         self.pd_delete_btn.configure(state="disabled")
@@ -636,7 +839,7 @@ class AdminWindow(ctk.CTkToplevel):
 
     def _pd_edit_on_color(self, selection):
         self._pd_edit_sel_color = selection
-        self.pd_edit_dim_var.set("Sélectionner une dimension...")
+        self.pd_edit_dim_var.set("Dimension...")
         self._pd_product_id = None
         self.pd_delete_btn.configure(state="disabled")
 
@@ -668,122 +871,104 @@ class AdminWindow(ctk.CTkToplevel):
         if not product:
             return
 
-        _, cat, dim, width, height, color, cost = product
+        _, cat, dim, width, height, color, image_path, cost, tariff = product
+        self._pd_current_image_path = image_path
 
-        # ── Product Metadata ──
-        meta = ctk.CTkFrame(self.pd_edit_area, fg_color=COLORS["bg_dark"], corner_radius=10)
-        meta.pack(fill="x", pady=(0, 6))
+        meta = ctk.CTkFrame(self.pd_edit_area, fg_color="transparent")
+        meta.pack(fill="x", pady=(10, 10))
 
-        ctk.CTkLabel(meta, text=f"MODIFICATION : {cat} / {color} / {dim}",
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=COLORS["warning"]).pack(pady=(8, 2), padx=12, anchor="w")
+        # Edit Image button
+        img_frame = ctk.CTkFrame(meta, fg_color="transparent")
+        img_frame.pack(side="right", padx=(10, 0))
+        
+        self.pd_img_label = ctk.CTkLabel(img_frame, text=os.path.basename(image_path) if image_path else "Aucune image", font=ctk.CTkFont(size=10), text_color=COLORS["text_muted"])
+        self.pd_img_label.pack(side="top")
+        
+        ctk.CTkButton(img_frame, text="🖼 Modifier Image", height=28, width=120, fg_color=COLORS["bg_card_hover"], hover_color=COLORS["border"], text_color=COLORS["text_primary"], command=self._pd_choose_image).pack(side="top", pady=(2, 0))
+
+        ctk.CTkLabel(
+            meta, text=f"MODIFICATION : {cat} / {color} / {dim}",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["warning"]
+        ).pack(pady=(0, 5), anchor="w")
 
         dim_str = str(dim) if dim else ""
-
         dim_edit_row = ctk.CTkFrame(meta, fg_color="transparent")
-        dim_edit_row.pack(fill="x", padx=12, pady=(2, 3))
+        dim_edit_row.pack(fill="x")
 
         if dim_str.startswith("Ø"):
-            # RMB: ØDiamètre*Hauteur
             parts = dim_str[1:].split("*")
             diam_val = parts[0] if len(parts) >= 1 else str(width or "")
             h_val = parts[1] if len(parts) >= 2 else str(height or "")
 
-            ctk.CTkLabel(dim_edit_row, text="Diamètre :", width=65, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_diameter = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                                  fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="DIAMÈTRE", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_diameter = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_diameter.insert(0, diam_val)
-            self.pd_edit_diameter.pack(side="left", padx=(0, 10))
+            self.pd_edit_diameter.pack(side="left", padx=(0, 15))
 
-            ctk.CTkLabel(dim_edit_row, text="Hauteur :", width=55, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                                fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="HAUTEUR", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_height.insert(0, h_val)
             self.pd_edit_height.pack(side="left")
-
             self._pd_edit_geom = "rmb"
-
         elif dim_str.count("*") == 2:
-            # Tôle: Largeur*Profondeur*Hauteur
             parts = dim_str.split("*")
-
-            ctk.CTkLabel(dim_edit_row, text="Largeur :", width=55, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_width = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                               fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="LARGEUR", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_width = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_width.insert(0, parts[0])
-            self.pd_edit_width.pack(side="left", padx=(0, 10))
+            self.pd_edit_width.pack(side="left", padx=(0, 15))
 
-            ctk.CTkLabel(dim_edit_row, text="Prof. :", width=40, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_depth = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                               fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="PROFONDEUR", width=80, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_depth = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_depth.insert(0, parts[1])
-            self.pd_edit_depth.pack(side="left", padx=(0, 10))
+            self.pd_edit_depth.pack(side="left", padx=(0, 15))
 
-            ctk.CTkLabel(dim_edit_row, text="Haut. :", width=40, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                                fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="HAUTEUR", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_height.insert(0, parts[2])
             self.pd_edit_height.pack(side="left")
-
             self._pd_edit_geom = "tole"
-
         else:
-            # Legacy: Largeur*Hauteur
-            ctk.CTkLabel(dim_edit_row, text="Largeur :", width=55, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_width = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                               fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="LARGEUR", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_width = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_width.insert(0, str(width or ""))
-            self.pd_edit_width.pack(side="left", padx=(0, 10))
+            self.pd_edit_width.pack(side="left", padx=(0, 15))
 
-            ctk.CTkLabel(dim_edit_row, text="Hauteur :", width=55, anchor="w",
-                         font=ctk.CTkFont(size=11), text_color=COLORS["text_secondary"]).pack(side="left")
-            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=70, height=28,
-                                                fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"])
+            ctk.CTkLabel(dim_edit_row, text="HAUTEUR", width=70, anchor="w", font=ctk.CTkFont(size=11, weight="bold"), text_color=COLORS["text_secondary"]).pack(side="left")
+            self.pd_edit_height = ctk.CTkEntry(dim_edit_row, width=80, height=30, fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6)
             self.pd_edit_height.insert(0, str(height or ""))
             self.pd_edit_height.pack(side="left")
-
             self._pd_edit_geom = "legacy"
 
-        ctk.CTkLabel(dim_edit_row,
-                     text=f"Total: {float(cost):.2f} DA" if cost else "Total: 0.00 DA",
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=COLORS["accent"]).pack(side="right", padx=(0, 4))
+        ctk.CTkLabel(
+            dim_edit_row,
+            text=f"TOTAL : {float(cost):.2f} DA" if cost else "TOTAL : 0.00 DA",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+            text_color=COLORS["accent"]
+        ).pack(side="right", padx=(0, 4))
 
-        # ── BOM Components ──
-        ctk.CTkLabel(self.pd_edit_area, text="COMPOSANTS",
-                     font=ctk.CTkFont(size=12, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(pady=(2, 3), anchor="w")
+        # BOM Components
+        ctk.CTkLabel(
+            self.pd_edit_area, text="COMPOSANTS",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=COLORS["text_muted"]
+        ).pack(pady=(10, 5), anchor="w")
 
         self.pd_edit_bom_frame = ctk.CTkScrollableFrame(
-            self.pd_edit_area, fg_color=COLORS["bg_dark"], corner_radius=10, height=120
+            self.pd_edit_area, fg_color=COLORS["bg_dark"], corner_radius=6, height=180
         )
-        self.pd_edit_bom_frame.pack(fill="both", expand=True, pady=(0, 4))
+        self.pd_edit_bom_frame.pack(fill="both", expand=True, pady=(0, 10))
 
         # Header
         hdr = ctk.CTkFrame(self.pd_edit_bom_frame, fg_color="transparent")
         hdr.pack(fill="x", pady=(4, 2))
-        ctk.CTkLabel(hdr, text="Nom", width=120, anchor="w",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 0))
-        ctk.CTkLabel(hdr, text="Qté", width=55, anchor="center",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Prix unitaire", width=75, anchor="center",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(side="left", padx=2)
-        ctk.CTkLabel(hdr, text="Sous-total", width=75, anchor="e",
-                     font=ctk.CTkFont(size=10, weight="bold"),
-                     text_color=COLORS["text_muted"]).pack(side="right", padx=(0, 36))
+        ctk.CTkLabel(hdr, text="NOM", width=180, anchor="w", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 0))
+        ctk.CTkLabel(hdr, text="QTÉ", width=70, anchor="center", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="P.U.", width=90, anchor="center", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(side="left", padx=2)
+        ctk.CTkLabel(hdr, text="S-TOTAL", width=90, anchor="e", font=ctk.CTkFont(size=10, weight="bold"), text_color=COLORS["text_muted"]).pack(side="right", padx=(0, 40))
 
-        ctk.CTkFrame(self.pd_edit_bom_frame, height=1, fg_color=COLORS["border"]).pack(fill="x", padx=4, pady=1)
+        ctk.CTkFrame(self.pd_edit_bom_frame, height=1, fg_color=COLORS["border"]).pack(fill="x", padx=4, pady=4)
 
-        # Load existing components
         components = self.db_mgr.get_components_for_product(self._pd_product_id)
         for comp_id, name, qty, unit_price, subtotal in components:
             self._pd_add_edit_comp_row(
@@ -793,24 +978,23 @@ class AdminWindow(ctk.CTkToplevel):
                 f"{float(subtotal):.2f}" if subtotal else "0.00"
             )
 
-        # Add component button
+        # Buttons
         btn_row = ctk.CTkFrame(self.pd_edit_area, fg_color="transparent")
-        btn_row.pack(fill="x", pady=(2, 4))
+        btn_row.pack(fill="x")
 
         ctk.CTkButton(
-            btn_row, text="➕ Ajouter un composant", height=28,
+            btn_row, text="➕ AJOUTER COMPOSANT", height=32,
             fg_color="transparent", hover_color=COLORS["bg_card_hover"],
-            border_width=1, border_color=COLORS["accent_dim"],
-            text_color=COLORS["accent"], font=ctk.CTkFont(size=11),
-            command=lambda: self._pd_add_edit_comp_row(None)
+            border_width=1, border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            command=lambda: self._pd_add_edit_comp_row(None), corner_radius=6
         ).pack(side="left")
 
-        # Save button
         ctk.CTkButton(
-            btn_row, text="💾  Enregistrer toutes les modifications", height=34,
-            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._pd_save_edit
+            btn_row, text="💾 ENREGISTRER MODIFICATIONS", height=36,
+            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"], text_color=COLORS["bg_dark"],
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            command=self._pd_save_edit, corner_radius=6
         ).pack(side="right")
 
     def _pd_add_edit_comp_row(self, comp_id, name="", qty="1.00", price="0.00", subtotal="0.00"):
@@ -818,32 +1002,36 @@ class AdminWindow(ctk.CTkToplevel):
         row.pack(fill="x", pady=2)
 
         name_var = ctk.StringVar(value=name)
-        ctk.CTkEntry(row, textvariable=name_var, width=120, height=28,
-                     font=ctk.CTkFont(size=11), placeholder_text="Nom",
-                     fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"]
-                     ).pack(side="left", padx=(4, 2))
+        ctk.CTkEntry(
+            row, textvariable=name_var, width=180, height=30,
+            font=ctk.CTkFont(family="Segoe UI", size=11), placeholder_text="Nom",
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6
+        ).pack(side="left", padx=(4, 2))
 
         qty_var = ctk.StringVar(value=qty)
-        ctk.CTkEntry(row, textvariable=qty_var, width=55, height=28,
-                     font=ctk.CTkFont(size=11),
-                     fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"]
-                     ).pack(side="left", padx=2)
+        ctk.CTkEntry(
+            row, textvariable=qty_var, width=70, height=30,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6
+        ).pack(side="left", padx=2)
 
         price_var = ctk.StringVar(value=price)
-        ctk.CTkEntry(row, textvariable=price_var, width=75, height=28,
-                     font=ctk.CTkFont(size=11),
-                     fg_color=COLORS["bg_card"], border_color=COLORS["accent_dim"]
-                     ).pack(side="left", padx=2)
+        ctk.CTkEntry(
+            row, textvariable=price_var, width=90, height=30,
+            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"], corner_radius=6
+        ).pack(side="left", padx=2)
 
-        sub_label = ctk.CTkLabel(row, text=f"{subtotal} DA", width=75, anchor="e",
-                                  font=ctk.CTkFont(size=11),
-                                  text_color=COLORS["text_secondary"])
-        sub_label.pack(side="left", padx=2)
+        ctk.CTkLabel(
+            row, text=f"{subtotal} DA", width=90, anchor="e",
+            font=ctk.CTkFont(family="Consolas", size=11, weight="bold"),
+            text_color=COLORS["text_secondary"]
+        ).pack(side="left", padx=2)
 
         ctk.CTkButton(
-            row, text="✕", width=26, height=26,
+            row, text="✕", width=30, height=30,
             fg_color="transparent", hover_color=COLORS["error"],
-            text_color=COLORS["error"], font=ctk.CTkFont(size=11),
+            text_color=COLORS["error"], font=ctk.CTkFont(size=12, weight="bold"),
             command=lambda r=row, cid=comp_id: self._pd_remove_edit_comp(r, cid)
         ).pack(side="right", padx=(2, 4))
 
@@ -851,19 +1039,30 @@ class AdminWindow(ctk.CTkToplevel):
 
     def _pd_remove_edit_comp(self, row, comp_id):
         if comp_id is not None:
-            confirm = messagebox.askyesno("Supprimer le composant",
-                "Supprimer ce composant définitivement ?", parent=self)
+            confirm = messagebox.askyesno("Supprimer le composant", "Supprimer ce composant définitivement ?", parent=self)
             if not confirm:
                 return
             self.db_mgr.delete_component(comp_id)
-
         self._pd_comp_vars = [(c, n, q, p, r) for c, n, q, p, r in self._pd_comp_vars if r != row]
         row.destroy()
+
+    def _pd_choose_image(self):
+        path = filedialog.askopenfilename(filetypes=[("Images", "*.png *.jpg *.jpeg")])
+        if path:
+            import shutil
+            dest_dir = os.path.join(self.db_mgr.app_data_dir, "images")
+            os.makedirs(dest_dir, exist_ok=True)
+            import uuid
+            ext = os.path.splitext(path)[1]
+            new_name = f"img_{uuid.uuid4().hex[:8]}{ext}"
+            dest_path = os.path.join(dest_dir, new_name)
+            shutil.copy2(path, dest_path)
+            self._pd_current_image_path = dest_path
+            self.pd_img_label.configure(text=new_name)
 
     def _pd_save_edit(self):
         if not self._pd_product_id:
             return
-
         try:
             new_h = int(self.pd_edit_height.get().strip())
             if self._pd_edit_geom == "rmb":
@@ -874,12 +1073,10 @@ class AdminWindow(ctk.CTkToplevel):
             messagebox.showerror("Erreur", "Les dimensions doivent être des entiers.", parent=self)
             return
 
-        # Auto-checkpoint
         product = self.db_mgr.get_product_by_id(self._pd_product_id)
         if product:
-            _, cat, dim, _, _, color, _ = product
+            _, cat, dim, _, _, color, _, _, _ = product
             self.db_mgr.create_checkpoint(f"Auto — avant modification {cat}/{color}/{dim}")
-            # Build dimension string based on geometry type
             if self._pd_edit_geom == "rmb":
                 new_dim = f"Ø{new_w}*{new_h}"
             elif self._pd_edit_geom == "tole":
@@ -890,9 +1087,8 @@ class AdminWindow(ctk.CTkToplevel):
                 new_dim = f"{new_w}*{new_depth}*{new_h}"
             else:
                 new_dim = f"{new_w}*{new_h}"
-            self.db_mgr.update_product(self._pd_product_id, cat, color, new_dim, new_w, new_h)
+            self.db_mgr.update_product(self._pd_product_id, cat, color, new_dim, new_w, new_h, image_path=self._pd_current_image_path)
 
-        # Update/add components
         for comp_id, name_var, qty_var, price_var, _ in self._pd_comp_vars:
             cname = name_var.get().strip()
             if not cname:
@@ -903,85 +1099,54 @@ class AdminWindow(ctk.CTkToplevel):
             except ValueError:
                 messagebox.showerror("Erreur", f"Nombre invalide pour '{cname}'.", parent=self)
                 return
-
             if comp_id is not None:
                 self.db_mgr.update_component(comp_id, cname, cqty, cprice)
             else:
                 self.db_mgr.add_component(self._pd_product_id, cname, cqty, cprice)
 
         self._update_cp_status()
-
         prod = self.db_mgr.get_product_by_id(self._pd_product_id)
-        total = float(prod[6]) if prod and prod[6] else 0
-        self.pd_status.configure(
-            text=f"✅ Enregistré — Total : {total:.2f} DA",
-            text_color=COLORS["success"]
-        )
-
-        if self.refresh_callback:
-            self.refresh_callback()
-
+        total = float(prod[7]) if prod and prod[7] else 0
+        self.pd_status.configure(text=f"✅ ENREGISTRÉ — TOTAL : {total:.2f} DA", text_color=COLORS["success"])
+        self.refresh_view()
         messagebox.showinfo("Succès", f"Produit mis à jour. Nouveau total : {total:.2f} DA", parent=self)
-
-        # Reload to refresh comp IDs
         self._pd_load_edit_form()
-
-    # ─── DELETE PRODUCT ──────────────────────────────────────────────────────
 
     def _pd_delete_product(self):
         if not self._pd_product_id:
             return
-
         product = self.db_mgr.get_product_by_id(self._pd_product_id)
         if not product:
             return
-
-        _, cat, dim, _, _, color, cost = product
+        _, cat, dim, _, _, color, _, cost, _ = product
 
         confirm = messagebox.askyesno(
             "Confirmer la suppression",
             f"Supprimer définitivement :\n\n{cat} / {color} / {dim}\nCoût : {float(cost):.2f} DA\n\nCela supprimera le produit et TOUS ses composants.\nÊtes-vous sûr ?",
-            parent=self,
-            icon="warning"
+            parent=self, icon="warning"
         )
         if not confirm:
             return
-
         cp_confirm = messagebox.askyesno(
             "Créer un point de sauvegarde ?",
             "Voulez-vous créer un point de sauvegarde avant de supprimer ce produit ?\n\n(Cliquez sur 'Oui' par sécurité, ou sur 'Non' pour le vaporiser à jamais sans sauvegarde).",
             parent=self
         )
-
         if cp_confirm:
             self.db_mgr.create_checkpoint(f"Auto — avant suppression {cat}/{color}/{dim}")
             
         self.db_mgr.delete_product(self._pd_product_id)
-
         self._pd_product_id = None
         self.pd_delete_btn.configure(state="disabled")
         self._update_cp_status()
-
-        self.pd_status.configure(
-            text=f"🗑 Supprimé : {cat} / {color} / {dim}",
-            text_color=COLORS["error"]
-        )
-
-        if self.refresh_callback:
-            self.refresh_callback()
-
+        self.pd_status.configure(text=f"🗑 SUPPRIMÉ : {cat} / {color} / {dim}", text_color=COLORS["error"])
+        self.refresh_view()
         messagebox.showinfo("Supprimé", f"Produit retiré : {cat} / {color} / {dim}", parent=self)
-
-        # Reset to edit selector
         self._pd_show_edit_form()
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # SHARED: Checkpoints & Restore
-    # ═══════════════════════════════════════════════════════════════════════════
 
     def _update_cp_status(self):
         cps = self.db_mgr.list_checkpoints()
-        self.cp_status.configure(text=f"📌 {len(cps)} point(s) de sauvegarde disponible(s)")
+        self.cp_status.configure(text=f"📌 {len(cps)} POINT(S) DE SAUVEGARDE DISPONIBLE(S)")
 
     def _create_manual_checkpoint(self):
         dialog = ctk.CTkInputDialog(text="Nom du point de sauvegarde (optionnel) :", title="Créer un point de sauvegarde")
@@ -1009,15 +1174,14 @@ class AdminWindow(ctk.CTkToplevel):
         rx = (screen_w - rw) // 2
         ry = (screen_h - rh) // 2
         restore_win.geometry(f"{rw}x{rh}+{rx}+{ry}")
-
         restore_win.transient(self)
         restore_win.grab_set()
         restore_win.lift()
         restore_win.after(100, restore_win.focus_force)
 
         ctk.CTkLabel(
-            restore_win, text="⏪  SÉLECTIONNER LE POINT DE SAUVEGARDE À RESTAURER",
-            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
+            restore_win, text="⏪ SÉLECTIONNER LE POINT DE SAUVEGARDE À RESTAURER",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
             text_color=COLORS["accent"]
         ).pack(pady=(20, 4), padx=20, anchor="w")
 
@@ -1026,7 +1190,7 @@ class AdminWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(size=12), text_color=COLORS["warning"]
         ).pack(pady=(0, 12), padx=20, anchor="w")
 
-        scroll = ctk.CTkScrollableFrame(restore_win, fg_color=COLORS["bg_card"], corner_radius=12)
+        scroll = ctk.CTkScrollableFrame(restore_win, fg_color=COLORS["bg_card"], corner_radius=10)
         scroll.pack(fill="both", expand=True, padx=20, pady=(0, 20))
 
         for cp_id, cp_name, cp_time in checkpoints:
@@ -1034,29 +1198,24 @@ class AdminWindow(ctk.CTkToplevel):
             row.pack(fill="x", pady=4)
 
             ctk.CTkLabel(
-                row, text=f"📌 {cp_name}",
-                font=ctk.CTkFont(size=13, weight="bold"),
+                row, text=f"📌 {cp_name}", font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
                 text_color=COLORS["text_primary"]
             ).pack(side="left", padx=(8, 0))
 
             ctk.CTkLabel(
-                row, text=cp_time,
-                font=ctk.CTkFont(size=11),
-                text_color=COLORS["text_muted"]
+                row, text=cp_time, font=ctk.CTkFont(family="Consolas", size=11), text_color=COLORS["text_muted"]
             ).pack(side="left", padx=(12, 0))
 
             ctk.CTkButton(
                 row, text="🗑", width=32, height=32,
-                fg_color="transparent", hover_color=COLORS["error"],
-                text_color=COLORS["error"],
+                fg_color="transparent", hover_color=COLORS["error"], text_color=COLORS["error"],
                 command=lambda cid=cp_id, win=restore_win: self._delete_checkpoint(cid, win)
             ).pack(side="right", padx=(4, 8))
 
             ctk.CTkButton(
-                row, text="Restaurer", width=80, height=32,
-                fg_color=COLORS["warning"], hover_color="#e5a800",
-                text_color=COLORS["bg_dark"],
-                font=ctk.CTkFont(size=12, weight="bold"),
+                row, text="RESTAURER", width=80, height=32,
+                fg_color=COLORS["warning"], hover_color="#e5a800", text_color=COLORS["bg_dark"],
+                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
                 command=lambda cid=cp_id, cname=cp_name, win=restore_win: self._do_restore(cid, cname, win)
             ).pack(side="right", padx=4)
 
@@ -1072,8 +1231,7 @@ class AdminWindow(ctk.CTkToplevel):
         dialog.destroy()
         self._update_cp_status()
         messagebox.showinfo("Restauré", f"Produits et tarification restaurés à : {checkpoint_name}", parent=self)
-        if self.refresh_callback:
-            self.refresh_callback()
+        self.refresh_view()
 
     def _delete_checkpoint(self, checkpoint_id, dialog):
         confirm = messagebox.askyesno("Supprimer le point de sauvegarde", "Supprimer ce point de sauvegarde définitivement ?", parent=dialog)
@@ -1084,265 +1242,9 @@ class AdminWindow(ctk.CTkToplevel):
         self._update_cp_status()
         self._open_restore_dialog()
 
-
-class CPQApp(ctk.CTk):
-    """Main application window."""
-
-    def __init__(self):
-        super().__init__()
-
-        self.db = DatabaseQuery()
-        self.title("CPQ — Configuration, Prix, Devis")
-
-        # ── Screen-aware sizing + DPI scaling ──
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-
-        # Scale factor: everything is designed for 1080p (1920x1080).
-        # On smaller/larger screens, scale widgets proportionally.
-        REF_W, REF_H = 1920, 1080
-        scale_w = screen_w / REF_W
-        scale_h = screen_h / REF_H
-        scale_factor = min(scale_w, scale_h)  # Use the tighter axis
-        scale_factor = max(0.65, min(scale_factor, 1.6))  # Clamp: 65%–160%
-
-        ctk.set_widget_scaling(scale_factor)
-        ctk.set_window_scaling(scale_factor)
-
-        win_w = max(int(700 * scale_factor), int(screen_w * 0.65))
-        win_h = max(int(500 * scale_factor), int(screen_h * 0.75))
-        # Don't exceed screen
-        win_w = min(win_w, screen_w - 40)
-        win_h = min(win_h, screen_h - 80)
-        x = (screen_w - win_w) // 2
-        y = (screen_h - win_h) // 2
-        self.geometry(f"{win_w}x{win_h}+{x}+{y}")
-        self.minsize(int(700 * scale_factor), int(500 * scale_factor))
-        self.configure(fg_color=COLORS["bg_dark"])
-
-        # State
-        self._selected_category = None
-        self._selected_color = None
-        self._dimensions_cache = []
-
-        self._build_layout()
-        self._populate_categories()
-
-    def _build_layout(self):
-        # ── Top Bar ──
-        self.top_bar = ctk.CTkFrame(self, height=56, fg_color=COLORS["bg_card"],
-                                     corner_radius=0)
-        self.top_bar.pack(fill="x")
-        self.top_bar.pack_propagate(False)
-
-        self.logo_label = ctk.CTkLabel(
-            self.top_bar, text="⬡  CPQ",
-            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
-            text_color=COLORS["accent"]
-        )
-        self.logo_label.pack(side="left", padx=24)
-
-        self.admin_btn = ctk.CTkButton(
-            self.top_bar, text="⚙ Administration", width=80, height=30,
-            command=self.open_admin, fg_color=COLORS["accent_dim"]
-        )
-        self.admin_btn.pack(side="left", padx=20)
-
-        self.status_label = ctk.CTkLabel(
-            self.top_bar, text="",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color=COLORS["text_muted"]
-        )
-        self.status_label.pack(side="right", padx=24)
-
-        # Update status with product count
-        try:
-            count = self.db.get_product_count()
-            self.status_label.configure(text=f"📦 {count} Produits chargés")
-        except Exception:
-            self.status_label.configure(text="⚠ Erreur de base de données")
-
-        # ── Main Container (grid-based for responsive scaling) ──
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_container.pack(fill="both", expand=True, padx=24, pady=20)
-        self.main_container.columnconfigure(0, weight=2, minsize=320)
-        self.main_container.columnconfigure(1, weight=3, minsize=300)
-        self.main_container.rowconfigure(0, weight=1)
-
-        # Left Panel — Selectors
-        self.left_panel = ctk.CTkFrame(
-            self.main_container, fg_color=COLORS["bg_card"],
-            corner_radius=16, border_width=1, border_color=COLORS["border"]
-        )
-        self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-
-        self._build_selectors()
-
-        # Right Panel — Pricing Card
-        self.pricing_card = PricingCard(self.main_container)
-        self.pricing_card.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
-
-    def _build_selectors(self):
-        # Title
-        title = ctk.CTkLabel(
-            self.left_panel, text="CONFIGURATION",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color=COLORS["text_muted"]
-        )
-        title.pack(pady=(24, 4), padx=24, anchor="w")
-
-        subtitle = ctk.CTkLabel(
-            self.left_panel,
-            text="Rechercher ou sélectionner une catégorie, couleur et dimension",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color=COLORS["text_secondary"]
-        )
-        subtitle.pack(pady=(0, 12), padx=24, anchor="w")
-
-        # ── Search Bar ──
-        self.search_frame = ctk.CTkFrame(self.left_panel, fg_color="transparent")
-        self.search_frame.pack(fill="x", padx=24, pady=(0, 8))
-
-        self.search_entry = ctk.CTkEntry(
-            self.search_frame,
-            placeholder_text="🔍  Rechercher une dimension (ex: 600*60)...",
-            height=40,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color=COLORS["bg_dark"],
-            border_color=COLORS["accent_dim"],
-            text_color=COLORS["text_primary"],
-            placeholder_text_color=COLORS["text_muted"],
-            corner_radius=10
-        )
-        self.search_entry.pack(fill="x")
-        self.search_entry.bind("<KeyRelease>", self._on_search_change)
-
-        # ── Search Results (hidden by default) ──
-        self.search_results_frame = ctk.CTkScrollableFrame(
-            self.left_panel,
-            height=0,
-            fg_color=COLORS["bg_dark"],
-            corner_radius=10
-        )
-        self._search_visible = False
-
-        # ── Separator between search and dropdowns ──
-        self.search_sep = ctk.CTkFrame(self.left_panel, height=1, fg_color=COLORS["border"])
-        self.search_sep.pack(fill="x", padx=24, pady=(4, 12))
-
-        # ── Step 1: Category ──
-        self._make_step_label(self.left_panel, "1", "PRODUCT CATEGORY")
-
-        self.category_var = ctk.StringVar(value="Sélectionner une catégorie...")
-        self.category_menu = ctk.CTkOptionMenu(
-            self.left_panel,
-            variable=self.category_var,
-            values=["Chargement..."],
-            command=self._on_category_change,
-            height=40,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color=COLORS["bg_dark"],
-            button_color=COLORS["accent_dim"],
-            button_hover_color=COLORS["accent"],
-            dropdown_fg_color=COLORS["bg_card"],
-            dropdown_hover_color=COLORS["accent_dim"],
-            corner_radius=10
-        )
-        self.category_menu.pack(fill="x", padx=24, pady=(0, 16))
-
-        # ── Step 2: Color ──
-        self._make_step_label(self.left_panel, "2", "COLOR / FINISH")
-
-        self.color_var = ctk.StringVar(value="Sélectionner une couleur...")
-        self.color_menu = ctk.CTkOptionMenu(
-            self.left_panel,
-            variable=self.color_var,
-            values=["—"],
-            command=self._on_color_change,
-            height=40,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color=COLORS["bg_dark"],
-            button_color=COLORS["accent_dim"],
-            button_hover_color=COLORS["accent"],
-            dropdown_fg_color=COLORS["bg_card"],
-            dropdown_hover_color=COLORS["accent_dim"],
-            corner_radius=10,
-            state="disabled"
-        )
-        self.color_menu.pack(fill="x", padx=24, pady=(0, 16))
-
-        # ── Step 3: Dimension ──
-        self._make_step_label(self.left_panel, "3", "DIMENSION")
-
-        self.dim_var = ctk.StringVar(value="Sélectionner une dimension...")
-        self.dim_menu = ctk.CTkOptionMenu(
-            self.left_panel,
-            variable=self.dim_var,
-            values=["—"],
-            command=self._on_dimension_change,
-            height=40,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            dropdown_font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color=COLORS["bg_dark"],
-            button_color=COLORS["accent_dim"],
-            button_hover_color=COLORS["accent"],
-            dropdown_fg_color=COLORS["bg_card"],
-            dropdown_hover_color=COLORS["accent_dim"],
-            corner_radius=10,
-            state="disabled"
-        )
-        self.dim_menu.pack(fill="x", padx=24, pady=(0, 24))
-
-        # ── Reset Button ──
-        self.reset_btn = ctk.CTkButton(
-            self.left_panel, text="↺  Réinitialiser la sélection",
-            command=self._reset_all,
-            height=38,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color="transparent",
-            border_width=1,
-            border_color=COLORS["border"],
-            hover_color=COLORS["bg_card_hover"],
-            text_color=COLORS["text_secondary"],
-            corner_radius=10
-        )
-        self.reset_btn.pack(fill="x", padx=24, pady=(8, 24))
-
-        # ── Status Indicator ──
-        self.selector_status = ctk.CTkLabel(
-            self.left_panel, text="",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=COLORS["text_muted"]
-        )
-        self.selector_status.pack(pady=(0, 16), padx=24, anchor="w")
-
+    # ─── SEARCH / CASCADE / REFRESH ──────────────────────────────────────────
     def _format_dim_display(self, dim_str, w=None, h=None):
-        """Format dimension string for display based on geometry type."""
         return format_dim_display(dim_str, w, h)
-
-    def _make_step_label(self, parent, step_num, text):
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", padx=24, pady=(4, 6))
-
-        badge = ctk.CTkLabel(
-            frame, text=step_num, width=24, height=24,
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color=COLORS["accent_dim"],
-            corner_radius=12,
-            text_color=COLORS["accent"]
-        )
-        badge.pack(side="left", padx=(0, 8))
-
-        label = ctk.CTkLabel(
-            frame, text=text,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            text_color=COLORS["text_secondary"]
-        )
-        label.pack(side="left")
-
-    # ─── Search Logic ────────────────────────────────────────────────────────
 
     def _on_search_change(self, event=None):
         query = self.search_entry.get().strip()
@@ -1353,47 +1255,36 @@ class CPQApp(ctk.CTk):
         self._show_search_results(results)
 
     def _show_search_results(self, results):
-        # Clear previous
         for w in self.search_results_frame.winfo_children():
             w.destroy()
-
         if not results:
             self.search_results_frame.configure(height=40)
             if not self._search_visible:
-                self.search_results_frame.pack(after=self.search_frame, fill="x", padx=24, pady=(0, 4))
+                self.search_results_frame.pack(after=self.search_frame, fill="x", pady=(0, 10))
                 self._search_visible = True
-            lbl = ctk.CTkLabel(
-                self.search_results_frame, text="Aucun résultat trouvé",
-                font=ctk.CTkFont(family="Segoe UI", size=12),
+            ctk.CTkLabel(
+                self.search_results_frame, text="AUCUN RÉSULTAT",
+                font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
                 text_color=COLORS["text_muted"]
-            )
-            lbl.pack(pady=8)
+            ).pack(pady=8)
             return
 
-        # Show results frame
         display_height = min(len(results) * 36, 180)
         self.search_results_frame.configure(height=display_height)
         if not self._search_visible:
-            self.search_results_frame.pack(after=self.search_frame, fill="x", padx=24, pady=(0, 4))
+            self.search_results_frame.pack(after=self.search_frame, fill="x", pady=(0, 10))
             self._search_visible = True
 
-        cat_names = {
-            "GSD": "GSD", "GDD": "GDD", "GBF": "GBF"
-        }
         for cat, color, dim, w, h, cost in results:
-            row_btn = ctk.CTkButton(
-                self.search_results_frame,
-                text=f"{cat}  ·  {color}  ·  {dim}  ({self._format_dim_display(dim, w, h)})    —  {cost:,.2f} DA" if cost else f"{cat}  ·  {color}  ·  {dim}  ({self._format_dim_display(dim, w, h)})",
-                font=ctk.CTkFont(family="Segoe UI", size=12),
-                fg_color="transparent",
-                hover_color=COLORS["accent_dim"],
-                text_color=COLORS["text_secondary"],
-                anchor="w",
-                height=32,
-                corner_radius=8,
+            text_disp = f"{cat} · {color} · {dim} ({self._format_dim_display(dim, w, h)})"
+            if cost: text_disp += f" — {cost:,.2f} DA"
+            ctk.CTkButton(
+                self.search_results_frame, text=text_disp,
+                font=ctk.CTkFont(family="Segoe UI", size=12), fg_color="transparent",
+                hover_color=COLORS["bg_card_hover"], text_color=COLORS["text_secondary"],
+                anchor="w", height=32, corner_radius=6,
                 command=lambda c=cat, co=color, d=dim: self._on_search_select(c, co, d)
-            )
-            row_btn.pack(fill="x", padx=2, pady=1)
+            ).pack(fill="x", padx=2, pady=1)
 
     def _hide_search_results(self):
         if self._search_visible:
@@ -1403,27 +1294,20 @@ class CPQApp(ctk.CTk):
                 w.destroy()
 
     def _on_search_select(self, category_code, color, dimension):
-        """Handle click on search result — load product and sync dropdowns."""
-        # Hide search results
         self._hide_search_results()
         self.search_entry.delete(0, "end")
-
-        # Sync state
         self._selected_category = category_code
         self._selected_color = color
 
-        # Sync category dropdown
         for display, code in self._category_map.items():
             if code == category_code:
                 self.category_var.set(display)
                 break
 
-        # Sync color dropdown
         colors = self.db.get_colors_for_category(category_code)
         self.color_menu.configure(state="normal", values=colors)
         self.color_var.set(color)
 
-        # Sync dimension dropdown
         dims = self.db.get_dimensions_for(category_code, color)
         self._dimensions_cache = dims
         display_dims = [f"{d[0]}  ({self._format_dim_display(d[0], d[1], d[2])})" for d in dims]
@@ -1434,130 +1318,141 @@ class CPQApp(ctk.CTk):
                 self.dim_var.set(disp)
                 break
 
-        # Load product + BOM
-        product = self.db.get_product(category_code, color, dimension)
-        components = self.db.get_product_components(category_code, color, dimension)
-        if product:
-            self.pricing_card.update_card(product, components)
-            self.selector_status.configure(
-                text="✓ Produit trouvé — tarification affichée",
-                text_color=COLORS["success"]
-            )
-
-    # ─── Cascade Logic ───────────────────────────────────────────────────────
+        self._update_cards(category_code, color, dimension)
 
     def _populate_categories(self):
         categories = self.db.get_categories()
-        display_values = [f"{code}  —  {name}" for code, name in categories]
-        self._category_map = {f"{code}  —  {name}": code for code, name in categories}
+        display_values = [f"{code} — {name}" for code, name in categories]
+        self._category_map = {f"{code} — {name}": code for code, name in categories}
         self.category_menu.configure(values=display_values)
 
     def _on_category_change(self, selection):
         code = self._category_map.get(selection)
-        if not code:
-            return
+        if not code: return
         self._selected_category = code
-
-        # Reset downstream
         self.color_var.set("Sélectionner une couleur...")
         self.dim_var.set("Sélectionner une dimension...")
         self.dim_menu.configure(state="disabled", values=["—"])
-        self.pricing_card.clear_card()
-
-        # Populate colors
+        self._clear_cards()
         colors = self.db.get_colors_for_category(code)
         if colors:
             self.color_menu.configure(state="normal", values=colors)
-            self.selector_status.configure(
-                text=f"✓ {len(colors)} couleur(s) disponible(s)"
-            )
+            self.selector_status.configure(text=f"✓ {len(colors)} COULEUR(S)")
         else:
-            self.color_menu.configure(state="disabled", values=["Aucune couleur trouvée"])
-            self.selector_status.configure(text="⚠ Aucune couleur pour cette catégorie")
+            self.color_menu.configure(state="disabled", values=["Aucune couleur"])
+            self.selector_status.configure(text="⚠ AUCUNE COULEUR")
 
     def _on_color_change(self, selection):
         self._selected_color = selection
-
-        # Reset dimension
         self.dim_var.set("Sélectionner une dimension...")
-        self.pricing_card.clear_card()
-
-        # Populate dimensions
+        self._clear_cards()
         dims = self.db.get_dimensions_for(self._selected_category, selection)
         self._dimensions_cache = dims
         if dims:
             display = [f"{d[0]}  ({self._format_dim_display(d[0], d[1], d[2])})" for d in dims]
             self._dim_map = {f"{d[0]}  ({self._format_dim_display(d[0], d[1], d[2])})": d[0] for d in dims}
             self.dim_menu.configure(state="normal", values=display)
-            self.selector_status.configure(
-                text=f"✓ {len(dims)} dimension(s) disponible(s)"
-            )
+            self.selector_status.configure(text=f"✓ {len(dims)} DIMENSION(S)")
         else:
-            self.dim_menu.configure(state="disabled", values=["Aucune dimension trouvée"])
-            self.selector_status.configure(text="⚠ Aucune dimension pour cette combinaison")
+            self.dim_menu.configure(state="disabled", values=["Aucune dimension"])
+            self.selector_status.configure(text="⚠ AUCUNE DIMENSION")
 
     def _on_dimension_change(self, selection):
         dim_key = self._dim_map.get(selection)
-        if not dim_key:
-            return
+        if not dim_key: return
+        self._update_cards(self._selected_category, self._selected_color, dim_key)
 
-        # Fetch product
-        product = self.db.get_product(
-            self._selected_category, self._selected_color, dim_key
-        )
-
-        # Fetch BOM components
-        components = self.db.get_product_components(
-            self._selected_category, self._selected_color, dim_key
-        )
-
+    def _update_cards(self, cat, color, dim):
+        product = self.db.get_product(cat, color, dim)
+        components = self.db.get_product_components(cat, color, dim)
+        
         if product:
-            self.pricing_card.update_card(product, components)
-            self.selector_status.configure(
-                text="✓ Produit trouvé — tarification affichée",
-                text_color=COLORS["success"]
-            )
+            p_cat, p_dim, p_w, p_h, p_col, p_cost, p_tariff, p_img = product
+            
+            cat_names = {"GSD": "Grille Simple Déflexion", "GDD": "Grille Double Déflexion", "GBF": "Grille à Barre Fixe"}
+            title = f"{cat_names.get(p_cat, p_cat)} — {p_col}".upper()
+            self.lbl_product_sub.configure(text=title)
+            
+            # Update Image
+            if p_img and os.path.exists(p_img):
+                try:
+                    pil_img = Image.open(p_img)
+                    # Resize proportionally to fit in max 250x250 for display
+                    pil_img.thumbnail((250, 250))
+                    ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=pil_img.size)
+                    self.lbl_image.configure(image=ctk_img, text="")
+                except Exception:
+                    self.lbl_image.configure(image=None, text="Image introuvable ou invalide")
+            else:
+                self.lbl_image.configure(image=None, text="Aucune image")
+            
+            if p_cost is not None:
+                self.lbl_prix.configure(text=f"{p_cost:,.2f} DA")
+            else:
+                self.lbl_prix.configure(text="N/A")
+                
+            dim_str = str(p_dim) if p_dim else ""
+            if dim_str.startswith("Ø"):
+                parts = dim_str[1:].split("*")
+                if len(parts) == 2:
+                    self.lbl_dims.configure(text=f"DIAMÈTRE: {parts[0]} mm × HAUTEUR: {parts[1]} mm")
+                else:
+                    self.lbl_dims.configure(text=f"DIAMÈTRE: {dim_str[1:]} mm")
+            elif dim_str.count("*") == 2:
+                parts = dim_str.split("*")
+                self.lbl_dims.configure(text=f"L: {parts[0]} mm × P: {parts[1]} mm × H: {parts[2]} mm")
+            else:
+                self.lbl_dims.configure(text=f"L: {p_w} mm × H: {p_h} mm")
+                
+            for w in self.bom_list.winfo_children():
+                w.destroy()
+                
+            if components:
+                for name, qty, unit_price, subtotal in components:
+                    row = ctk.CTkFrame(self.bom_list, fg_color="transparent")
+                    row.pack(fill="x", pady=2)
+                    ctk.CTkLabel(row, text="■", font=ctk.CTkFont(size=10), text_color=COLORS["accent"]).pack(side="left", padx=(0, 8))
+                    ctk.CTkLabel(row, text=str(name).upper(), font=ctk.CTkFont(family="Segoe UI", size=12), text_color=COLORS["text_secondary"]).pack(side="left")
+                    price_text = f"{subtotal:,.2f} DA" if subtotal is not None else "—"
+                    ctk.CTkLabel(row, text=price_text, font=ctk.CTkFont(family="Consolas", size=12), text_color=COLORS["text_primary"]).pack(side="right")
+
+                ctk.CTkFrame(self.bom_list, height=1, fg_color=COLORS["border"]).pack(fill="x", pady=(10, 5))
+                total = sum(s for _, _, _, s in components if s is not None)
+                total_row = ctk.CTkFrame(self.bom_list, fg_color="transparent")
+                total_row.pack(fill="x")
+                ctk.CTkLabel(total_row, text="TOTAL", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), text_color=COLORS["accent"]).pack(side="left")
+                ctk.CTkLabel(total_row, text=f"{total:,.2f} DA", font=ctk.CTkFont(family="Consolas", size=14, weight="bold"), text_color=COLORS["accent"]).pack(side="right")
+                
+            self.selector_status.configure(text="✓ PRODUIT TROUVÉ", text_color=COLORS["success"])
         else:
-            self.pricing_card.clear_card()
-            self.selector_status.configure(
-                text="⚠ Non standard — pas dans le catalogue",
-                text_color=COLORS["warning"]
-            )
+            self._clear_cards()
+            self.selector_status.configure(text="⚠ NON STANDARD", text_color=COLORS["warning"])
+
+    def _clear_cards(self):
+        self.lbl_product_sub.configure(text="SÉLECTIONNER UN PRODUIT")
+        self.lbl_prix.configure(text="— DA")
+        self.lbl_dims.configure(text="—")
+        for w in self.bom_list.winfo_children():
+            w.destroy()
 
     def refresh_view(self):
-        # Refresh product count in status bar
-        try:
-            count = self.db.get_product_count()
-            self.status_label.configure(text=f"📦 {count} Produits chargés")
-        except Exception:
-            pass
-
-        # Save current selections
+        self._update_status_count()
         current_cat = self.category_var.get()
         current_color = self.color_var.get()
         current_dim = self.dim_var.get()
-
-        # Repopulate top-level categories from DB
         self._populate_categories()
 
-        # Attempt to restore previous cascade state
         if current_cat in self._category_map:
             self.category_var.set(current_cat)
             self._on_category_change(current_cat)
-
             if current_color != "Sélectionner une couleur..." and current_color in self.color_menu.cget("values"):
                 self.color_var.set(current_color)
                 self._on_color_change(current_color)
-
                 if current_dim != "Sélectionner une dimension..." and current_dim in [val.split(" ")[0] for val in self.dim_menu.cget("values")]:
-                    # Need to match the full string for the dropdown if we want, but _on_dimension_change handles the raw dim string or display string
                     self.dim_var.set(current_dim)
                     self._on_dimension_change(current_dim)
         else:
             self._reset_all()
-            
-    def open_admin(self):
-        AdminWindow(self, refresh_callback=self.refresh_view)
 
     def _reset_all(self):
         self._selected_category = None
@@ -1568,11 +1463,10 @@ class CPQApp(ctk.CTk):
         self.dim_var.set("Sélectionner une dimension...")
         self.color_menu.configure(state="disabled", values=["—"])
         self.dim_menu.configure(state="disabled", values=["—"])
-        self.pricing_card.clear_card()
+        self._clear_cards()
         self.selector_status.configure(text="", text_color=COLORS["text_muted"])
         self.search_entry.delete(0, "end")
         self._hide_search_results()
-
 
 # ─── Entry Point ─────────────────────────────────────────────────────────────
 def _global_exception_handler(exc_type, exc_value, exc_tb):
@@ -1594,4 +1488,5 @@ def _global_exception_handler(exc_type, exc_value, exc_tb):
 if __name__ == "__main__":
     sys.excepthook = _global_exception_handler
     app = CPQApp()
+    app.report_callback_exception = _global_exception_handler
     app.mainloop()

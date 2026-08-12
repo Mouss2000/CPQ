@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS products (
     width INTEGER NOT NULL,
     height INTEGER NOT NULL,
     color TEXT, -- 'Blanc' or 'Gris Anodise'
+    image_path TEXT,
     excel_cost REAL,
     excel_tariff REAL,
     FOREIGN KEY (category_code) REFERENCES product_categories(code)
