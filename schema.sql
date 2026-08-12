@@ -46,3 +46,16 @@ CREATE TABLE IF NOT EXISTS product_components (
     subtotal REAL,
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
+
+-- Global Constants
+CREATE TABLE IF NOT EXISTS global_constants (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL
+);
+
+-- Sheet Metal Thicknesses
+CREATE TABLE IF NOT EXISTS sheet_metal_thicknesses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reference TEXT UNIQUE NOT NULL,
+    thickness_mm REAL NOT NULL
+);

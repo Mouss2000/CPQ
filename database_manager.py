@@ -18,8 +18,7 @@ class DatabaseManager:
             base_dir = os.path.expanduser("~/.local/share")
         
         app_dir = os.path.join(base_dir, "CPQ_App")
-        if not os.path.exists(app_dir):
-            os.makedirs(app_dir)
+        os.makedirs(app_dir, exist_ok=True)
         return app_dir
 
     def _resource_path(self, relative_path):
@@ -36,16 +35,64 @@ class DatabaseManager:
         if not os.path.exists(self.db_path):
             bundled_db = self._resource_path(self.db_name)
             if os.path.exists(bundled_db):
-                shutil.copy2(bundled_db, self.db_path)
+                shutil.copyfile(bundled_db, self.db_path)
             else:
                 self._create_empty_db()
+        # Always run migrations for tables that may be missing from old seed DBs
+        self._ensure_calculator_tables()
+
+    def _ensure_calculator_tables(self):
+        """Ensure sheet_metal_thicknesses and global_constants exist with seed data."""
+        conn = self.get_connection()
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS global_constants (
+                    key TEXT PRIMARY KEY,
+                    value REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS sheet_metal_thicknesses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reference TEXT UNIQUE NOT NULL,
+                    thickness_mm REAL NOT NULL
+                );
+            """)
+            # Seed thickness data if table is empty
+            count = conn.execute("SELECT COUNT(*) FROM sheet_metal_thicknesses").fetchone()[0]
+            if count == 0:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO sheet_metal_thicknesses (reference, thickness_mm) VALUES (?, ?)",
+                    [
+                        ("EP 5/10",  0.5), ("EP 6/10",  0.6), ("EP 7/10",  0.7),
+                        ("EP 8/10",  0.8), ("EP 9/10",  0.9), ("EP 10/10", 1.0),
+                        ("EP 11/10", 1.1), ("EP 12/10", 1.2), ("EP 15/10", 1.5),
+                        ("EP 19/10", 1.9), ("EP 20/10", 2.0),
+                    ]
+                )
+            # Seed density multiplier if missing
+            conn.execute(
+                "INSERT OR IGNORE INTO global_constants (key, value) VALUES ('TOLE_DENSITY_MULTIPLIER', 8.0)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _create_empty_db(self):
-        conn = sqlite3.connect(self.db_path)
         schema_path = self._resource_path("schema.sql")
-        with open(schema_path, "r") as f:
-            conn.executescript(f.read())
-        conn.commit()
+        try:
+            with open(schema_path, "r", encoding="utf-8") as f:
+                schema_sql = f.read()
+        except (FileNotFoundError, UnicodeDecodeError) as e:
+            raise RuntimeError(f"Cannot read schema.sql: {e}")
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.executescript(schema_sql)
+            conn.commit()
+        except Exception:
+            conn.close()
+            # Remove the 0-byte DB so next launch retries instead of being stuck
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+            raise
         conn.close()
 
     def get_connection(self):
@@ -296,7 +343,7 @@ class DatabaseManager:
         try:
             cur = conn.cursor()
             cur.execute("SELECT category_code FROM checkpoint_products LIMIT 1")
-        except Exception:
+        except sqlite3.OperationalError:
             # Column doesn't exist (old schema), wipe tables to recreate with full snapshot schema
             conn.executescript("""
                 DROP TABLE IF EXISTS checkpoint_components;
@@ -417,6 +464,22 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def get_thicknesses(self):
+        conn = self.get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT reference, thickness_mm FROM sheet_metal_thicknesses ORDER BY thickness_mm")
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+
+    def get_density_multiplier(self):
+        conn = self.get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM global_constants WHERE key = 'TOLE_DENSITY_MULTIPLIER'")
+        row = cur.fetchone()
+        conn.close()
+        return float(row[0]) if row else 8.0
+
 if __name__ == "__main__":
     # Seed the initial database
     mgr = DatabaseManager()
@@ -442,6 +505,17 @@ if __name__ == "__main__":
         ('GSD', 'Grilles Simple Deflexion'),
         ('GDD', 'Grilles Double Deflexion')
     ])
+
+    # Seed Constants
+    cursor.execute("INSERT OR REPLACE INTO global_constants (key, value) VALUES (?, ?)", ('TOLE_DENSITY_MULTIPLIER', 8.0))
+
+    # Seed Sheet Metal Thicknesses
+    thicknesses = [
+        ('EP 5/10', 0.5), ('EP 6/10', 0.6), ('EP 7/10', 0.7), ('EP 8/10', 0.8),
+        ('EP 9/10', 0.9), ('EP 10/10', 1.0), ('EP 11/10', 1.1), ('EP 12/10', 1.2),
+        ('EP 15/10', 1.5), ('EP 19/10', 1.9), ('EP 20/10', 2.0)
+    ]
+    cursor.executemany("INSERT OR IGNORE INTO sheet_metal_thicknesses (reference, thickness_mm) VALUES (?, ?)", thicknesses)
 
     conn.commit()
     conn.close()
